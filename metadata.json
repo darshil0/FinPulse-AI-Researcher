@@ -1,0 +1,5 @@
+{
+  "name": "FinPulse AI Researcher",
+  "description": "AI-powered financial news research agent that extracts credible market data into structured CSV format.",
+  "requestFramePermissions": []
+}
