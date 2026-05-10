@@ -17,6 +17,11 @@ export default function App() {
     e.preventDefault();
     if (!query.trim()) return;
 
+    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+      setError('Start date cannot be after end date.');
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     try {
@@ -130,7 +135,7 @@ export default function App() {
                 id="startDate"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:border-indigo-500 transition-colors"
+                className={`px-3 py-1.5 bg-white border ${startDate ? 'border-indigo-500 ring-1 ring-indigo-500/20' : 'border-slate-200'} rounded-lg text-sm text-slate-700 outline-none focus:border-indigo-500 transition-colors`}
               />
             </div>
             <div className="flex items-center gap-2">
@@ -140,16 +145,23 @@ export default function App() {
                 id="endDate"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
-                className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:border-indigo-500 transition-colors"
+                className={`px-3 py-1.5 bg-white border ${endDate ? 'border-indigo-500 ring-1 ring-indigo-500/20' : 'border-slate-200'} rounded-lg text-sm text-slate-700 outline-none focus:border-indigo-500 transition-colors`}
               />
             </div>
-            <button 
-              type="button"
-              onClick={() => { setStartDate(''); setEndDate(''); }}
-              className="text-xs font-medium text-slate-400 hover:text-slate-600 transition-colors"
-            >
-              Clear Range
-            </button>
+            {(startDate || endDate) && (
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-[10px] font-bold uppercase tracking-wider border border-indigo-100">
+                  <Clock size={10} /> Historical Mode
+                </span>
+                <button 
+                  type="button"
+                  onClick={() => { setStartDate(''); setEndDate(''); }}
+                  className="text-xs font-medium text-slate-400 hover:text-rose-500 transition-colors flex items-center gap-1"
+                >
+                  Clear Range
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="mt-3 flex gap-2 overflow-x-auto pb-2 no-scrollbar">
@@ -214,7 +226,11 @@ export default function App() {
                   <BarChart3 size={24} />
                 </div>
               </div>
-              <h3 className="text-xl font-bold text-slate-900 mb-2">Agent is researching...</h3>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">
+                {isLoading && (startDate || endDate) 
+                  ? `Researching from ${startDate || 'earliest'} to ${endDate || 'now'}...`
+                  : 'Agent is researching...'}
+              </h3>
               <p className="text-slate-500 max-w-sm">
                 Scanning credible financial sources, deduplicating stories, and performing sentiment analysis.
               </p>

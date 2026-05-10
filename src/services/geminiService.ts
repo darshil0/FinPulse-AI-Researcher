@@ -118,7 +118,18 @@ export async function researchFinancialNews(query: string, startDate?: string, e
     },
   });
 
-  const csvText = response.text || "";
+  let csvText = response.text || "";
+  
+  // Clean markdown if present
+  if (csvText.includes('```')) {
+    const match = csvText.match(/```(?:csv)?\n([\s\S]*?)\n```/);
+    if (match) {
+      csvText = match[1];
+    } else {
+      // Fallback: try to just remove the lines with backticks
+      csvText = csvText.replace(/```[a-z]*\n/g, '').replace(/```/g, '');
+    }
+  }
   
   // Parse CSV
   const results = Papa.parse<NewsItem>(csvText.trim(), {
