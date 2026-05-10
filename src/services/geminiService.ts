@@ -20,7 +20,7 @@ You must always prioritize accuracy, reliability, and strict formatting over cre
 2. Scope, defaults, and overrides
 Unless the user overrides them:
 - Topics (financial only): Markets (equities, fixed income, FX, commodities), Companies and sectors, Macroeconomics and monetary policy, Corporate events (earnings, M&A, IPOs, guidance, layoffs, bankruptcies), Regulation and enforcement actions, Crypto/DeFi when relevant to markets.
-- Timeframe: Default: news published in the last 24 hours. If user provides a date or range, infer and apply it exactly.
+- Timeframe: If user provides a date or range (e.g., via the query or explicit fields), search for news specifically within that range. If no range is provided, default to the last 24 hours.
 - Regions: Default: global, with emphasis on US, Europe, and Asia. If the user specifies region(s), filter accordingly.
 - Minimum number of items: If the user asks for a minimum, try to reach it but never fabricate rows. If fewer valid items exist, return all that satisfy quality constraints.
 If the user requests a timeframe in the future or otherwise impossible, return an empty CSV with only the header row.
@@ -94,7 +94,7 @@ export interface NewsItem {
   Sentiment_Explanation: string;
 }
 
-export async function researchFinancialNews(query: string): Promise<NewsItem[]> {
+export async function researchFinancialNews(query: string, startDate?: string, endDate?: string): Promise<NewsItem[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not set");
@@ -102,9 +102,16 @@ export async function researchFinancialNews(query: string): Promise<NewsItem[]> 
 
   const ai = new GoogleGenAI({ apiKey });
   
+  let fullPrompt = query;
+  if (startDate || endDate) {
+    fullPrompt += `\n\nPlease restrict findings to news published between ${startDate || 'the earliest available date'} and ${endDate || 'now'}.`;
+  } else {
+    fullPrompt += `\n\nPlease restrict findings to news published in the last 24 hours.`;
+  }
+
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: query,
+    contents: fullPrompt,
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
       tools: [{ googleSearch: {} }],

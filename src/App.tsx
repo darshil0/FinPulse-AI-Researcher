@@ -6,7 +6,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
 
 export default function App() {
-  const [query, setQuery] = useState('Get all legit financial news for the last 24 hours about global tech markets');
+  const [query, setQuery] = useState('Get all legit financial news about global tech markets');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<NewsItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +20,7 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await researchFinancialNews(query);
+      const data = await researchFinancialNews(query, startDate, endDate);
       setResults(data);
     } catch (err) {
       console.error(err);
@@ -98,7 +100,7 @@ export default function App() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="e.g., Get all legit financial news for today about US semiconductor stocks..."
+              placeholder="e.g., Get all legit financial news about US semiconductor stocks..."
               className="w-full pl-12 pr-32 py-4 bg-white border border-slate-200 rounded-2xl shadow-sm focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all text-slate-800 placeholder:text-slate-400"
             />
             <button
@@ -119,11 +121,42 @@ export default function App() {
               )}
             </button>
           </form>
+          
+          <div className="mt-4 flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label htmlFor="startDate" className="text-xs font-bold text-slate-500 uppercase tracking-wider">Start Date</label>
+              <input 
+                type="date" 
+                id="startDate"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="endDate" className="text-xs font-bold text-slate-500 uppercase tracking-wider">End Date</label>
+              <input 
+                type="date" 
+                id="endDate"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+            <button 
+              type="button"
+              onClick={() => { setStartDate(''); setEndDate(''); }}
+              className="text-xs font-medium text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              Clear Range
+            </button>
+          </div>
+
           <div className="mt-3 flex gap-2 overflow-x-auto pb-2 no-scrollbar">
             {['US Tech Earnings', 'Crypto Regulation', 'Macro Outlook', 'M&A Deals'].map((tag) => (
               <button
                 key={tag}
-                onClick={() => setQuery(`Get all legit financial news for the last 24 hours about ${tag}`)}
+                onClick={() => setQuery(`Get all legit financial news about ${tag}`)}
                 className="px-3 py-1 bg-white border border-slate-200 rounded-full text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition-colors whitespace-nowrap"
               >
                 {tag}
