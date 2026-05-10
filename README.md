@@ -5,6 +5,9 @@ FinPulse AI Researcher is an institutional-grade financial news research and ext
 ## Features
 
 - **AI-Powered Extraction**: Uses Gemini 3 Flash with Google Search grounding to scan the web for real-time financial data.
+- **Visual Analytics Dashboard**: Real-time charts for sentiment breakdown and category analysis using Recharts.
+- **Research History**: Persistent local storage of recent queries for quick re-run.
+- **Interactive Data Grid**: Sortable columns, expandable reasoning, and high-density financial layout.
 - **Strict Data Schema**: Extracts 12 specific data points including Sentiment, Impact, and Source URLs.
 - **Historical Research**: Select a custom date range to retrieve news data from specific time periods.
 - **Sentiment Reasoning**: Provides concise explanations for assigned sentiments based on market impact.

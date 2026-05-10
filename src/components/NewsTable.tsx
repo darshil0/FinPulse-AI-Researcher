@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ExternalLink, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Info } from 'lucide-react';
-import { NewsItem } from '../services/geminiService';
+import { ExternalLink, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Info, ArrowUp, ArrowDown } from 'lucide-react';
+import { NewsItem, SortConfig } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
+import { cn } from '../lib/utils';
 
 interface NewsTableProps {
   items: NewsItem[];
+  sortConfig: SortConfig;
+  onSort: (key: keyof NewsItem) => void;
 }
 
 const SentimentBadge = ({ 
@@ -212,7 +215,7 @@ const NewsRow: React.FC<{ item: NewsItem; idx: number }> = ({ item, idx }) => {
   );
 };
 
-export const NewsTable: React.FC<NewsTableProps> = ({ items }) => {
+export const NewsTable: React.FC<NewsTableProps> = ({ items, sortConfig, onSort }) => {
   if (items.length === 0) {
     return (
       <div className="p-12 text-center border border-dashed border-slate-300 rounded-xl bg-slate-50/50">
@@ -221,18 +224,35 @@ export const NewsTable: React.FC<NewsTableProps> = ({ items }) => {
     );
   }
 
+  const HeaderCell = ({ label, sortKey }: { label: string; sortKey: keyof NewsItem }) => (
+    <th 
+      className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100 transition-colors group"
+      onClick={() => onSort(sortKey)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        <span className={cn(
+          "transition-opacity",
+          sortConfig.key === sortKey ? "opacity-100" : "opacity-0 group-hover:opacity-30"
+        )}>
+          {sortConfig.key === sortKey && sortConfig.direction === 'desc' ? <ArrowDown size={10} /> : <ArrowUp size={10} />}
+        </span>
+      </div>
+    </th>
+  );
+
   return (
     <div className="w-full overflow-hidden border border-slate-200 rounded-xl bg-white shadow-sm">
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-slate-50 border-bottom border-slate-200">
-              <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider">Date/Time</th>
-              <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider">Entity</th>
-              <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider">Headline & Summary</th>
-              <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider">Category</th>
-              <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider">Sentiment</th>
-              <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider">Impact</th>
+              <HeaderCell label="Date/Time" sortKey="Date" />
+              <HeaderCell label="Entity" sortKey="Primary_Ticker_or_Entity" />
+              <HeaderCell label="Headline" sortKey="Headline" />
+              <HeaderCell label="Category" sortKey="Category" />
+              <HeaderCell label="Sentiment" sortKey="Sentiment" />
+              <HeaderCell label="Impact" sortKey="Impact" />
               <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider">Source</th>
             </tr>
           </thead>

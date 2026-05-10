@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-05-10
+
+### Added
+- **Analytics Dashboard**: Integrated Recharts for visual sentiment and category distribution.
+- **Research History**: Local storage persistence for recent research queries.
+- **Interactive Sorting**: Multi-column sorting capabilities for the findings table.
+- **UI Architecture**: Centralized types and modern utility-based component structure.
+
 ## [1.2.0] - 2026-05-10
 
 ### Added

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import Papa from "papaparse";
+import { NewsItem } from "../types";
 
 const SYSTEM_INSTRUCTION = `
 You are an advanced multi‑model financial news research agent deployed in a production environment in Google AI Studio.
@@ -78,21 +79,6 @@ Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Categ
 6. Respond (CSV only).
 Never describe or reveal these internal steps in your answers.
 `;
-
-export interface NewsItem {
-  Date: string;
-  Time: string;
-  Headline: string;
-  Short_Summary: string;
-  Primary_Ticker_or_Entity: string;
-  Region_or_Market: string;
-  Category: string;
-  Source_Name: string;
-  Source_URL: string;
-  Sentiment: string;
-  Impact: string;
-  Sentiment_Explanation: string;
-}
 
 export async function researchFinancialNews(query: string, startDate?: string, endDate?: string): Promise<NewsItem[]> {
   const apiKey = process.env.GEMINI_API_KEY;

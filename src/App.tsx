@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
-import { Search, Download, Loader2, BarChart3, Globe2, Clock, Terminal } from 'lucide-react';
-import { researchFinancialNews, NewsItem } from './services/geminiService';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Search, Download, Loader2, BarChart3, Globe2, Clock, Terminal, History as HistoryIcon, Bookmark, Trash2, Filter } from 'lucide-react';
+import { researchFinancialNews } from './services/geminiService';
 import { NewsTable } from './components/NewsTable';
+import { AnalyticsDashboard } from './components/AnalyticsDashboard';
+import { NewsItem, SortConfig, ResearchHistoryItem } from './types';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
+import { cn } from './lib/utils';
 
 export default function App() {
   const [query, setQuery] = useState('Get all legit financial news about global tech markets');
@@ -12,6 +15,16 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<NewsItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'Date', direction: 'desc' });
+  const [history, setHistory] = useState<ResearchHistoryItem[]>(() => {
+    const saved = localStorage.getItem('finpulse_history');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('finpulse_history', JSON.stringify(history));
+  }, [history]);
 
   const handleResearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,12 +40,57 @@ export default function App() {
     try {
       const data = await researchFinancialNews(query, startDate, endDate);
       setResults(data);
+      
+      // Save to history
+      const newHistoryItem: ResearchHistoryItem = {
+        id: crypto.randomUUID(),
+        query,
+        timestamp: Date.now(),
+        startDate,
+        endDate,
+        itemCount: data.length
+      };
+      setHistory(prev => [newHistoryItem, ...prev].slice(0, 10)); // Keep last 10
     } catch (err) {
       console.error(err);
       setError('Failed to fetch financial news. Please check your API key and try again.');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const onSort = useCallback((key: keyof NewsItem) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  }, []);
+
+  const sortedResults = useMemo(() => {
+    if (!results || !sortConfig.key) return results;
+
+    return [...results].sort((a, b) => {
+      const aValue = a[sortConfig.key!];
+      const bValue = b[sortConfig.key!];
+
+      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [results, sortConfig]);
+
+  const clearHistory = () => {
+    setHistory([]);
+    localStorage.removeItem('finpulse_history');
+  };
+
+  const runHistoryQuery = (item: ResearchHistoryItem) => {
+    setQuery(item.query);
+    setStartDate(item.startDate || '');
+    setEndDate(item.endDate || '');
+    setShowHistory(false);
+    // Trigger search manually by calling handleResearch or similar logic
+    // For simplicity, we just set the values and let the user click search
   };
 
   const downloadCSV = () => {
@@ -62,15 +120,76 @@ export default function App() {
               FinPulse <span className="text-indigo-600">AI</span>
             </h1>
           </div>
-          <div className="flex items-center gap-4 text-xs font-medium text-slate-500 uppercase tracking-widest">
-            <div className="flex items-center gap-1.5">
-              <Globe2 size={14} /> Global Coverage
+          <div className="flex items-center gap-6">
+            <div className="hidden md:flex items-center gap-4 text-xs font-medium text-slate-500 uppercase tracking-widest">
+              <div className="flex items-center gap-1.5">
+                <Globe2 size={14} /> Global Coverage
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Clock size={14} /> Real-time
+              </div>
             </div>
-            <div className="flex items-center gap-1.5">
-              <Clock size={14} /> Real-time
-            </div>
+            
+            <button 
+              onClick={() => setShowHistory(!showHistory)}
+              className={cn(
+                "p-2 rounded-lg transition-colors relative",
+                showHistory ? "bg-indigo-50 text-indigo-600" : "hover:bg-slate-100 text-slate-500"
+              )}
+              title="Recent Research"
+            >
+              <HistoryIcon size={20} />
+              {history.length > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 bg-indigo-500 rounded-full border-2 border-white"></span>
+              )}
+            </button>
           </div>
         </div>
+
+        {/* History Panel */}
+        <AnimatePresence>
+          {showHistory && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="bg-slate-50 border-t border-slate-200 overflow-hidden"
+            >
+              <div className="max-w-7xl mx-auto px-4 md:px-8 py-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                    <HistoryIcon size={16} /> Recent Research
+                  </h3>
+                  <button onClick={clearHistory} className="text-xs text-rose-500 hover:text-rose-600 font-medium flex items-center gap-1">
+                    <Trash2 size={12} /> Clear History
+                  </button>
+                </div>
+                
+                {history.length === 0 ? (
+                  <p className="text-sm text-slate-400 italic">No recent searches found.</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {history.map(item => (
+                      <div 
+                        key={item.id}
+                        onClick={() => runHistoryQuery(item)}
+                        className="bg-white p-3 rounded-xl border border-slate-200 hover:border-indigo-300 transition-colors cursor-pointer group shadow-sm"
+                      >
+                        <div className="text-xs font-semibold text-slate-700 line-clamp-1 mb-1 group-hover:text-indigo-600">
+                          {item.query}
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] text-slate-400">
+                          <span>{new Date(item.timestamp).toLocaleString()}</span>
+                          <span className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">{item.itemCount} results</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -198,19 +317,33 @@ export default function App() {
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Research Findings</h3>
-                  <p className="text-sm text-slate-500">{results.length} credible items extracted</p>
+                  <h3 className="text-lg font-bold text-slate-900">Research Summary</h3>
+                  <p className="text-sm text-slate-500">{results.length} credible items extracted • Sorted by {sortConfig.key}</p>
                 </div>
-                <button
-                  onClick={downloadCSV}
-                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm active:scale-95"
-                >
-                  <Download size={16} />
-                  Export to Excel (CSV)
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={downloadCSV}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm active:scale-95"
+                  >
+                    <Download size={16} />
+                    Export to Excel (CSV)
+                  </button>
+                </div>
               </div>
+
+              <AnalyticsDashboard items={results} />
               
-              <NewsTable items={results} />
+              <div className="pt-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <Filter size={16} className="text-slate-400" />
+                  <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Detailed Data Grid</h4>
+                </div>
+                <NewsTable 
+                  items={sortedResults || []} 
+                  sortConfig={sortConfig}
+                  onSort={onSort}
+                />
+              </div>
             </motion.div>
           )}
 
