@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-05-10
+
+### Added
+- **Date Range Research**: Users can now select start and end dates to retrieve historical financial news data.
+- **Historical Mode Indicator**: Visual feedback when a date range is active.
+- **Robust CSV Parsing**: Enhanced the data extraction logic to handle AI-formatted markdown code blocks more reliably.
+
+### Changed
+- **Async Loader Update**: The loading state now contextually reflects the selected date range.
+- **Dependency Optimization**: Removed unused server-side and utility packages (`express`, `better-sqlite3`, `dotenv`) to streamline the client-side build.
+
+### Fixed
+- **Validation logic**: Added checks to prevent research attempts with invalid date ranges (start date after end date).
+
 ## [1.1.0] - 2026-03-29
 
 ### Added
