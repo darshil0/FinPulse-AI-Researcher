@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Search, Download, Loader2, BarChart3, Globe2, Clock, Terminal, History as HistoryIcon, Bookmark, Trash2, Filter } from 'lucide-react';
+import { Search, Download, Loader2, BarChart3, Globe2, Clock, Terminal, History as HistoryIcon, Trash2, Filter } from 'lucide-react';
 import { researchFinancialNews } from './services/geminiService';
 import { NewsTable } from './components/NewsTable';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
@@ -14,6 +14,7 @@ export default function App() {
   const [endDate, setEndDate] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<NewsItem[] | null>(null);
+  const [filterText, setFilterText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'Date', direction: 'desc' });
   const [history, setHistory] = useState<ResearchHistoryItem[]>(() => {
@@ -26,37 +27,47 @@ export default function App() {
     localStorage.setItem('finpulse_history', JSON.stringify(history));
   }, [history]);
 
-  const handleResearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
+  const performResearch = async (searchQuery: string, sDate: string, eDate: string) => {
+    if (!searchQuery.trim()) return;
 
-    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+    if (sDate && eDate && new Date(sDate) > new Date(eDate)) {
       setError('Start date cannot be after end date.');
       return;
     }
 
     setIsLoading(true);
     setError(null);
+    setResults(null);
+
     try {
-      const data = await researchFinancialNews(query, startDate, endDate);
+      const data = await researchFinancialNews(searchQuery, sDate, eDate);
       setResults(data);
       
       // Save to history
       const newHistoryItem: ResearchHistoryItem = {
         id: crypto.randomUUID(),
-        query,
+        query: searchQuery,
         timestamp: Date.now(),
-        startDate,
-        endDate,
+        startDate: sDate,
+        endDate: eDate,
         itemCount: data.length
       };
-      setHistory(prev => [newHistoryItem, ...prev].slice(0, 10)); // Keep last 10
-    } catch (err) {
+      setHistory(prev => {
+        // Avoid duplicate recent identical searches
+        const filtered = prev.filter(h => h.query !== searchQuery || h.startDate !== sDate || h.endDate !== eDate);
+        return [newHistoryItem, ...filtered].slice(0, 10);
+      });
+    } catch (err: any) {
       console.error(err);
-      setError('Failed to fetch financial news. Please check your API key and try again.');
+      setError(err.message || 'Failed to fetch financial news. Please check your API key and try again.');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleResearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await performResearch(query, startDate, endDate);
   };
 
   const onSort = useCallback((key: keyof NewsItem) => {
@@ -66,10 +77,23 @@ export default function App() {
     }));
   }, []);
 
-  const sortedResults = useMemo(() => {
-    if (!results || !sortConfig.key) return results;
+  const filteredResults = useMemo(() => {
+    if (!results) return null;
+    if (!filterText.trim()) return results;
 
-    return [...results].sort((a, b) => {
+    const search = filterText.toLowerCase();
+    return results.filter(item =>
+      item.Headline.toLowerCase().includes(search) ||
+      item.Primary_Ticker_or_Entity.toLowerCase().includes(search) ||
+      item.Short_Summary.toLowerCase().includes(search) ||
+      item.Category.toLowerCase().includes(search)
+    );
+  }, [results, filterText]);
+
+  const sortedResults = useMemo(() => {
+    if (!filteredResults || !sortConfig.key) return filteredResults;
+
+    return [...filteredResults].sort((a, b) => {
       const aValue = a[sortConfig.key!];
       const bValue = b[sortConfig.key!];
 
@@ -85,12 +109,13 @@ export default function App() {
   };
 
   const runHistoryQuery = (item: ResearchHistoryItem) => {
+    const sDate = item.startDate || '';
+    const eDate = item.endDate || '';
     setQuery(item.query);
-    setStartDate(item.startDate || '');
-    setEndDate(item.endDate || '');
+    setStartDate(sDate);
+    setEndDate(eDate);
     setShowHistory(false);
-    // Trigger search manually by calling handleResearch or similar logic
-    // For simplicity, we just set the values and let the user click search
+    performResearch(item.query, sDate, eDate);
   };
 
   const downloadCSV = () => {
@@ -287,7 +312,11 @@ export default function App() {
             {['US Tech Earnings', 'Crypto Regulation', 'Macro Outlook', 'M&A Deals'].map((tag) => (
               <button
                 key={tag}
-                onClick={() => setQuery(`Get all legit financial news about ${tag}`)}
+                onClick={() => {
+                  const q = `Get all legit financial news about ${tag}`;
+                  setQuery(q);
+                  performResearch(q, startDate, endDate);
+                }}
                 className="px-3 py-1 bg-white border border-slate-200 rounded-full text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition-colors whitespace-nowrap"
               >
                 {tag}
@@ -322,6 +351,16 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-3">
                   <button
+                    onClick={() => {
+                      setResults(null);
+                      setFilterText('');
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-500 hover:text-rose-600 hover:bg-rose-50 hover:border-rose-200 transition-colors shadow-sm active:scale-95"
+                  >
+                    <Trash2 size={16} />
+                    Clear Results
+                  </button>
+                  <button
                     onClick={downloadCSV}
                     className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm active:scale-95"
                   >
@@ -334,9 +373,23 @@ export default function App() {
               <AnalyticsDashboard items={results} />
               
               <div className="pt-4">
-                <div className="flex items-center gap-2 mb-4">
-                  <Filter size={16} className="text-slate-400" />
-                  <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Detailed Data Grid</h4>
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                  <div className="flex items-center gap-2">
+                    <Filter size={16} className="text-slate-400" />
+                    <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Detailed Data Grid</h4>
+                  </div>
+                  <div className="relative max-w-xs w-full">
+                    <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400">
+                      <Search size={14} />
+                    </div>
+                    <input
+                      type="text"
+                      value={filterText}
+                      onChange={(e) => setFilterText(e.target.value)}
+                      placeholder="Filter results..."
+                      className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                    />
+                  </div>
                 </div>
                 <NewsTable 
                   items={sortedResults || []} 

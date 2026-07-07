@@ -116,6 +116,13 @@ export async function researchFinancialNews(query: string, startDate?: string, e
       csvText = csvText.replace(/```[a-z]*\n/g, '').replace(/```/g, '');
     }
   }
+
+  // If there's still non-CSV text (like a preamble), try to find the header row
+  const headerRow = "Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation";
+  const headerIndex = csvText.indexOf(headerRow);
+  if (headerIndex !== -1) {
+    csvText = csvText.substring(headerIndex);
+  }
   
   // Parse CSV
   const results = Papa.parse<NewsItem>(csvText.trim(), {
