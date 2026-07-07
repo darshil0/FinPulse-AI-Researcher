@@ -46,9 +46,9 @@ FinPulse AI Researcher is an institutional-grade financial news research and ext
 1. Enter a financial research query in the search bar.
 2. (Optional) Use the **Start Date** and **End Date** selectors to restrict the research to a specific historical period.
 3. Click "Run Agent" to start the research process.
-3. Review the findings in the interactive table.
-4. Click on a row to see the sentiment analysis explanation.
-5. Click "Export to Excel (CSV)" to download the structured data.
+4. Review the findings in the interactive table.
+5. Click on a row to see the sentiment analysis explanation.
+6. Click "Export to Excel (CSV)" to download the structured data.
 
 ## License
 
