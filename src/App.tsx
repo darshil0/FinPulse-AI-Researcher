@@ -446,7 +446,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-slate-400">
             <BarChart3 size={16} />
-            <span className="text-xs font-medium uppercase tracking-widest">FinPulse AI Researcher v1.0</span>
+            <span className="text-xs font-medium uppercase tracking-widest">FinPulse AI Researcher v1.3.0</span>
           </div>
           <div className="text-xs text-slate-400">
             Powered by Gemini 3 Flash & Google Search Grounding
