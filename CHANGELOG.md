@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-09-18
+
+### Added
+- **Runtime Schema Validation & Verification States**: Implemented strict Zod schema validation across all 12 CSV fields, categorizing findings into `Verified` vs. `Needs review` states without silently discarding invalid LLM outputs.
+- **Traceability & Audit Panel**: Added an interactive Traceability Audit drawer providing full audit chain details, including query context, model metadata, execution time, raw model response, grounding source URLs/titles, and row-level validation errors.
+- **Resilient AI Pipeline**: Enhanced Gemini research pipeline with exponential backoff, jitter, retry logic for 429 rate limits, and structured error handling for unparseable output or network failures.
+- **IndexedDB Research Storage & Legacy Migration**: Upgraded persistence to IndexedDB (`finpulse_db`) via `idb`, with automatic one-time background migration from legacy `localStorage`.
+- **Native XLSX Export**: Added formatted Excel workbook export using SheetJS (`xlsx`), featuring custom headers, auto-filters, frozen headers, and a dedicated `Traceability` metadata worksheet alongside standard CSV export.
+- **Continuous Integration Hardening**: Added GitHub Actions CI workflow running typechecks (`tsc --noEmit`), Vitest suite, and Vite build verification on pushes and PRs.
+- **Comprehensive Test Suite**: Added Vitest and React Testing Library tests covering validation, IndexedDB storage/migration, Excel export generation, Gemini service retries, and UI component rendering.
+
 ## [1.3.0] - 2026-05-10
 
 ### Added
