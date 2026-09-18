@@ -1,54 +1,71 @@
 # FinPulse AI Researcher
 
-FinPulse AI Researcher is an institutional-grade financial news research and extraction agent. It leverages advanced AI models to scan the web, identify credible financial news, and extract structured data into a clean CSV format suitable for direct import into Excel.
+FinPulse AI Researcher is an institutional-grade financial news research and extraction agent. It leverages advanced AI models to scan the web, identify credible financial news, validate output schemas at runtime, provide complete audit traceability, and export data in CSV and native XLSX formats.
 
-## Features
+## Key Features
 
-- **AI-Powered Extraction**: Uses Gemini 3 Flash with Google Search grounding to scan the web for real-time financial data.
-- **Visual Analytics Dashboard**: Real-time charts for sentiment breakdown and category analysis using Recharts.
-- **Research History**: Persistent local storage of recent queries for quick re-run.
-- **Interactive Data Grid**: Sortable columns, expandable reasoning, and high-density financial layout.
-- **Strict Data Schema**: Extracts 12 specific data points including Sentiment, Impact, and Source URLs.
-- **Historical Research**: Select a custom date range to retrieve news data from specific time periods.
-- **Sentiment Reasoning**: Provides concise explanations for assigned sentiments based on market impact.
-- **Professional Data Grid**: Displays findings in a scannable, high-density dashboard inspired by institutional financial tools.
-- **Expandable Insights**: Click on any news item to see the logic behind its sentiment score.
-- **Excel Integration**: One-click "Export to Excel" functionality that generates a clean CSV file.
-- **Deterministic Research**: Prioritizes accuracy and traceability over speculation.
+- **AI-Powered Extraction**: Uses Gemini 3 Flash (`gemini-3-flash-preview`) with Google Search Grounding for real-time financial news discovery.
+- **Strict Schema Validation & Untrusted Output Boundaries**: All LLM outputs pass through a runtime Zod validation boundary checking 12 required fields, valid HTTP/HTTPS URLs, supported sentiment enums (`Positive`, `Negative`, `Neutral`), and impact levels (`High`, `Medium`, `Low`).
+- **Deterministic Verification States**:
+  - **`Verified`**: Rows that satisfy all schema, field presence, valid HTTP/HTTPS source URL, and allowed enum constraints.
+  - **`Needs review`**: Rows flagged for missing citations, invalid URLs, malformed strings, or out-of-bounds values. Invalid rows remain fully accessible for auditability rather than being silently discarded.
+- **Traceability & Audit Chain**: Expandable audit drawer displaying query context, model extraction metadata, raw LLM output text, grounding sources, and per-row validation breakdowns with copy-to-clipboard support.
+- **Resilient AI Pipeline**: Exponential backoff retries with jitter for rate-limiting (HTTP 429) and transient errors, respecting `Retry-After` headers and classifying failures into distinct user states.
+- **IndexedDB Research Storage & Legacy Migration**: Asynchronous persistence using `idb` (`finpulse_db`), with automated one-time migration from legacy `localStorage` records and graceful fallbacks.
+- **Native XLSX & CSV Export**: Native `.xlsx` export with formatted headers, auto-filters, frozen top rows, and a dedicated `Traceability` metadata worksheet alongside standard `.csv` export.
+- **Visual Analytics & Data Grid**: Interactive Recharts sentiment and category charts, sortable grid, status filtering (`All`, `Verified Only`, `Needs Review`), and expandable reasoning.
 
 ## Tech Stack
 
-- **Frontend**: React 19, Tailwind CSS 4, Framer Motion, Lucide React.
-- **AI**: Google Gemini API (@google/genai) with Search Grounding.
-- **Data Handling**: PapaParse for robust CSV generation and parsing.
+- **Frontend**: React 19, Tailwind CSS 4, Framer Motion, Lucide React, Recharts.
+- **AI & Grounding**: `@google/genai` (Gemini 3 Flash with Google Search grounding).
+- **Validation & Storage**: Zod, `idb` (IndexedDB).
+- **Data Export & Parsing**: SheetJS (`xlsx`), PapaParse.
+- **Testing & Quality**: Vitest, `@testing-library/react`, TypeScript.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js installed.
-- A Gemini API Key (automatically handled in the AI Studio environment).
+- Node.js (v20+ recommended).
+- A valid Gemini API Key set in `GEMINI_API_KEY`.
 
-### Installation
+### Environment Variables
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
+| Variable | Description |
+| :--- | :--- |
+| `GEMINI_API_KEY` | Google Gemini API Key required for AI research calls. |
 
-2. Start the development server:
-   ```bash
-   npm run dev
-   ```
+### Local Development Commands
 
-## Usage
+- **Install dependencies**:
+  ```bash
+  npm install
+  ```
 
-1. Enter a financial research query in the search bar.
-2. (Optional) Use the **Start Date** and **End Date** selectors to restrict the research to a specific historical period.
-3. Click "Run Agent" to start the research process.
-4. Review the findings in the interactive table.
-5. Click on a row to see the sentiment analysis explanation.
-6. Click "Export to Excel (CSV)" to download the structured data.
+- **Start development server**:
+  ```bash
+  npm run dev
+  ```
+
+- **Typecheck & Lint**:
+  ```bash
+  npm run lint
+  ```
+
+- **Run Test Suite**:
+  ```bash
+  npm test
+  ```
+
+- **Production Build**:
+  ```bash
+  npm run build
+  ```
+
+## Continuous Integration
+
+GitHub Actions workflow is configured under `.github/workflows/ci.yml` running on pull requests and pushes to `main`/`master` branches. It executes deterministic dependency installation (`npm ci`), type checking (`npm run lint`), unit tests (`npm test`), and production builds (`npm run build`).
 
 ## License
 

@@ -1,6 +1,37 @@
 import { GoogleGenAI } from "@google/genai";
 import Papa from "papaparse";
 import { NewsItem } from "../types";
+import {
+  validateResearchResults,
+  ValidatedNewsItem,
+  ValidationSummary,
+  ResearchRunStatus,
+  ResearchErrorCode,
+} from "../lib/validation";
+
+export const GEMINI_CONFIG = {
+  MAX_RETRIES: 3,
+  INITIAL_RETRY_DELAY_MS: 1000,
+  MAX_RETRY_DELAY_MS: 10000,
+  MODEL_NAME: "gemini-3-flash-preview",
+};
+
+export interface GroundingSource {
+  title?: string;
+  url?: string;
+}
+
+export interface ResearchResult {
+  status: ResearchRunStatus;
+  errorCode?: ResearchErrorCode;
+  errorMessage?: string;
+  rawResponse: string;
+  groundingSources: GroundingSource[];
+  items: ValidatedNewsItem[];
+  summary: ValidationSummary;
+  modelName: string;
+  timestamp: number;
+}
 
 const SYSTEM_INSTRUCTION = `
 You are an advanced multi‑model financial news research agent deployed in a production environment in Google AI Studio.
@@ -80,55 +111,285 @@ Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Categ
 Never describe or reveal these internal steps in your answers.
 `;
 
-export async function researchFinancialNews(query: string, startDate?: string, endDate?: string): Promise<NewsItem[]> {
+function isRetryableError(err: any): boolean {
+  if (!err) return false;
+  const status = err.status || err.statusCode || err.response?.status;
+  const message = (err.message || '').toLowerCase();
+
+  // Rate limits or server errors are retryable
+  if (status === 429 || (status >= 500 && status < 600)) return true;
+
+  // Common network / timeout messages
+  if (
+    message.includes('fetch failed') ||
+    message.includes('network') ||
+    message.includes('timeout') ||
+    message.includes('econnreset') ||
+    message.includes('etimedout') ||
+    message.includes('rate limit') ||
+    message.includes('quota') ||
+    message.includes('503') ||
+    message.includes('500') ||
+    message.includes('429')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function calculateDelay(attempt: number, retryAfterHeader?: string | number): number {
+  if (retryAfterHeader) {
+    const seconds = parseInt(String(retryAfterHeader), 10);
+    if (!isNaN(seconds) && seconds > 0) {
+      return Math.min(seconds * 1000, GEMINI_CONFIG.MAX_RETRY_DELAY_MS);
+    }
+  }
+
+  // Exponential backoff with jitter
+  const backoff = GEMINI_CONFIG.INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+  const jitter = Math.random() * 200;
+  return Math.min(backoff + jitter, GEMINI_CONFIG.MAX_RETRY_DELAY_MS);
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(new Error('Operation cancelled'));
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new Error('Operation cancelled'));
+    });
+  });
+}
+
+function extractGroundingSources(response: any): GroundingSource[] {
+  const sources: GroundingSource[] = [];
+  try {
+    const candidates = response?.candidates || [];
+    for (const candidate of candidates) {
+      const groundingMetadata = candidate?.groundingMetadata;
+      if (groundingMetadata?.groundingChunks) {
+        for (const chunk of groundingMetadata.groundingChunks) {
+          if (chunk.web?.uri) {
+            sources.push({
+              title: chunk.web.title || chunk.web.uri,
+              url: chunk.web.uri,
+            });
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore extraction errors
+  }
+  return sources;
+}
+
+export async function researchFinancialNews(
+  query: string,
+  startDate?: string,
+  endDate?: string,
+  signal?: AbortSignal,
+  maxRetries = GEMINI_CONFIG.MAX_RETRIES
+): Promise<ResearchResult> {
+  const timestamp = Date.now();
   const apiKey = process.env.GEMINI_API_KEY;
+
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not set");
+    return {
+      status: 'network_error',
+      errorCode: 'PROVIDER_ERROR',
+      errorMessage: 'GEMINI_API_KEY is not set in environment.',
+      rawResponse: '',
+      groundingSources: [],
+      items: [],
+      summary: {
+        totalRows: 0,
+        verifiedRows: 0,
+        needsReviewRows: 0,
+        hasParseErrors: false,
+        parseErrors: [],
+      },
+      modelName: GEMINI_CONFIG.MODEL_NAME,
+      timestamp,
+    };
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  
+
   let fullPrompt = query;
   if (startDate || endDate) {
-    fullPrompt += `\n\nPlease restrict findings to news published between ${startDate || 'the earliest available date'} and ${endDate || 'now'}.`;
+    fullPrompt += `\n\nPlease restrict findings to news published between ${
+      startDate || 'the earliest available date'
+    } and ${endDate || 'now'}.`;
   } else {
     fullPrompt += `\n\nPlease restrict findings to news published in the last 24 hours.`;
   }
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: fullPrompt,
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      tools: [{ googleSearch: {} }],
-    },
-  });
+  let rawText = '';
+  let responseObj: any = null;
+  let lastError: any = null;
 
-  let csvText = response.text || "";
-  
-  // Clean markdown if present
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) {
+      return {
+        status: 'network_error',
+        errorCode: 'NETWORK_FAILURE',
+        errorMessage: 'Request was cancelled by user.',
+        rawResponse: '',
+        groundingSources: [],
+        items: [],
+        summary: {
+          totalRows: 0,
+          verifiedRows: 0,
+          needsReviewRows: 0,
+          hasParseErrors: false,
+          parseErrors: [],
+        },
+        modelName: GEMINI_CONFIG.MODEL_NAME,
+        timestamp,
+      };
+    }
+
+    try {
+      responseObj = await ai.models.generateContent({
+        model: GEMINI_CONFIG.MODEL_NAME,
+        contents: fullPrompt,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          tools: [{ googleSearch: {} }],
+        },
+      });
+
+      rawText = responseObj?.text || '';
+      lastError = null;
+      break; // Success
+    } catch (err: any) {
+      lastError = err;
+      if (attempt < maxRetries && isRetryableError(err)) {
+        const retryAfter = err?.response?.headers?.get?.('retry-after');
+        const waitTime = calculateDelay(attempt, retryAfter);
+        try {
+          await delay(waitTime, signal);
+        } catch {
+          break; // Aborted during delay
+        }
+      } else {
+        break; // Non-retryable or max retries reached
+      }
+    }
+  }
+
+  if (lastError) {
+    const isRateLimit =
+      lastError.status === 429 || (lastError.message || '').includes('429');
+    return {
+      status: 'network_error',
+      errorCode: isRateLimit ? 'RATE_LIMITED' : 'NETWORK_FAILURE',
+      errorMessage:
+        'Unable to connect to AI research provider. Please check your network connection or API quota.',
+      rawResponse: '',
+      groundingSources: [],
+      items: [],
+      summary: {
+        totalRows: 0,
+        verifiedRows: 0,
+        needsReviewRows: 0,
+        hasParseErrors: false,
+        parseErrors: [],
+      },
+      modelName: GEMINI_CONFIG.MODEL_NAME,
+      timestamp,
+    };
+  }
+
+  const groundingSources = extractGroundingSources(responseObj);
+
+  // Clean raw text
+  let csvText = rawText.trim();
   if (csvText.includes('```')) {
     const match = csvText.match(/```(?:csv)?\n([\s\S]*?)\n```/);
     if (match) {
       csvText = match[1];
     } else {
-      // Fallback: try to just remove the lines with backticks
       csvText = csvText.replace(/```[a-z]*\n/g, '').replace(/```/g, '');
     }
   }
 
-  // If there's still non-CSV text (like a preamble), try to find the header row
-  const headerRow = "Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation";
-  const headerIndex = csvText.indexOf(headerRow);
+  const headerRow =
+    'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation';
+  const headerIndex = csvText.indexOf('Date,Time,Headline');
   if (headerIndex !== -1) {
     csvText = csvText.substring(headerIndex);
   }
-  
-  // Parse CSV
-  const results = Papa.parse<NewsItem>(csvText.trim(), {
+
+  if (!csvText || !csvText.includes('Headline')) {
+    return {
+      status: 'unparseable_model_output',
+      errorCode: 'UNPARSEABLE_OUTPUT',
+      errorMessage:
+        'Model returned output that does not contain expected CSV header structure.',
+      rawResponse: rawText,
+      groundingSources,
+      items: [],
+      summary: {
+        totalRows: 0,
+        verifiedRows: 0,
+        needsReviewRows: 0,
+        hasParseErrors: true,
+        parseErrors: ['Missing expected header row'],
+      },
+      modelName: GEMINI_CONFIG.MODEL_NAME,
+      timestamp,
+    };
+  }
+
+  // Parse CSV with PapaParse
+  const parseResult = Papa.parse<Record<string, string>>(csvText.trim(), {
     header: true,
     skipEmptyLines: true,
   });
 
-  return results.data;
+  const parseErrors = parseResult.errors.map((e) => e.message);
+
+  if (parseResult.data.length === 0) {
+    return {
+      status: 'no_results',
+      rawResponse: rawText,
+      groundingSources,
+      items: [],
+      summary: {
+        totalRows: 0,
+        verifiedRows: 0,
+        needsReviewRows: 0,
+        hasParseErrors: parseErrors.length > 0,
+        parseErrors,
+      },
+      modelName: GEMINI_CONFIG.MODEL_NAME,
+      timestamp,
+    };
+  }
+
+  // Validate results with Zod schema & validation rules
+  const { items, summary } = validateResearchResults(parseResult.data, parseErrors);
+
+  const status: ResearchRunStatus =
+    summary.verifiedRows === summary.totalRows
+      ? 'success'
+      : summary.verifiedRows > 0
+      ? 'partial_success'
+      : 'unparseable_model_output';
+
+  return {
+    status,
+    rawResponse: rawText,
+    groundingSources,
+    items,
+    summary,
+    modelName: GEMINI_CONFIG.MODEL_NAME,
+    timestamp,
+  };
 }

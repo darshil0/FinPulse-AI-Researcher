@@ -3,11 +3,11 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, ResponsiveContainer, 
   PieChart, Pie, Cell, Legend 
 } from 'recharts';
-import { NewsItem } from '../types';
+import { ValidatedNewsItem } from '../lib/validation';
 import { BarChart3, PieChart as PieChartIcon, Activity } from 'lucide-react';
 
 interface AnalyticsDashboardProps {
-  items: NewsItem[];
+  items: ValidatedNewsItem[];
 }
 
 const COLORS = ['#10b981', '#f43f5e', '#64748b']; // Emerald, Rose, Slate for Pos, Neg, Neut
@@ -15,25 +15,27 @@ const IMPACT_COLORS = ['#e11d48', '#f59e0b', '#64748b']; // Rose-600, Amber-500,
 const CATEGORY_COLORS = ['#6366f1', '#a855f7', '#ec4899', '#f97316', '#eab308', '#8b5cf6', '#06b6d4'];
 
 export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ items }) => {
+  const newsData = items.map((i) => i.data);
+
   // Process Sentiment Data
   const sentimentData = [
-    { name: 'Positive', value: items.filter(i => i.Sentiment.toLowerCase() === 'positive').length },
-    { name: 'Negative', value: items.filter(i => i.Sentiment.toLowerCase() === 'negative').length },
-    { name: 'Neutral', value: items.filter(i => i.Sentiment.toLowerCase() === 'neutral').length },
+    { name: 'Positive', value: newsData.filter(i => (i.Sentiment || '').toLowerCase() === 'positive').length },
+    { name: 'Negative', value: newsData.filter(i => (i.Sentiment || '').toLowerCase() === 'negative').length },
+    { name: 'Neutral', value: newsData.filter(i => (i.Sentiment || '').toLowerCase() === 'neutral').length },
   ].filter(d => d.value > 0);
 
   // Process Impact Data
   const impactData = [
-    { name: 'High', value: items.filter(i => i.Impact.toLowerCase() === 'high').length },
-    { name: 'Medium', value: items.filter(i => i.Impact.toLowerCase() === 'medium').length },
-    { name: 'Low', value: items.filter(i => i.Impact.toLowerCase() === 'low').length },
+    { name: 'High', value: newsData.filter(i => (i.Impact || '').toLowerCase() === 'high').length },
+    { name: 'Medium', value: newsData.filter(i => (i.Impact || '').toLowerCase() === 'medium').length },
+    { name: 'Low', value: newsData.filter(i => (i.Impact || '').toLowerCase() === 'low').length },
   ].filter(d => d.value > 0);
 
   // Process Category Data
-  const categories = Array.from(new Set(items.map(i => i.Category)));
+  const categories = Array.from(new Set(newsData.map(i => i.Category).filter(Boolean)));
   const categoryData = categories.map(cat => ({
     name: cat,
-    count: items.filter(i => i.Category === cat).length
+    count: newsData.filter(i => i.Category === cat).length
   })).sort((a, b) => b.count - a.count);
 
   return (
