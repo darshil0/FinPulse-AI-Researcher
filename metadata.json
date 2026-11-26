@@ -1,5 +1,8 @@
 {
   "name": "FinPulse AI Researcher",
   "description": "AI-powered financial news research agent that extracts credible market data into structured CSV format.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
