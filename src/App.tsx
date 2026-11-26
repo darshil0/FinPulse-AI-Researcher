@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Search,
   Download,
@@ -26,6 +26,7 @@ import {
   saveResearchRun,
   getAllResearchRuns,
   clearAllResearchRuns,
+  deleteResearchRun,
   StoredResearchRun,
 } from './lib/storage/db';
 import { exportToXLSX, exportToCSV } from './lib/export/excel';
@@ -37,6 +38,7 @@ export default function App() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Active Research Result State
   const [currentResult, setCurrentResult] = useState<ResearchResult | null>(null);
@@ -64,7 +66,7 @@ export default function App() {
     if (sDate && eDate && new Date(sDate) > new Date(eDate)) {
       setCurrentResult({
         status: 'network_error',
-        errorCode: 'INVALID_RESPONSE_STRUCTURE',
+        errorCode: 'INVALID_DATE_RANGE',
         errorMessage: 'Start date cannot be after end date.',
         rawResponse: '',
         groundingSources: [],
@@ -84,12 +86,17 @@ export default function App() {
 
     setIsLoading(true);
     setCurrentResult(null);
+    setFilterText('');
+    setStatusFilter('all');
 
     const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     setRunId(newRunId);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      const result = await researchFinancialNews(searchQuery, sDate, eDate);
+      const result = await researchFinancialNews(searchQuery, sDate, eDate, controller.signal);
       setCurrentResult(result);
 
       // Save to IndexedDB
@@ -110,14 +117,15 @@ export default function App() {
       await saveResearchRun(runRecord);
       const updatedHistory = await getAllResearchRuns();
       setHistory(updatedHistory);
-    } catch (err: any) {
-      console.error(err);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Failed to fetch financial news. Please try again.';
       setCurrentResult({
         status: 'network_error',
         errorCode: 'NETWORK_FAILURE',
-        errorMessage:
-          err.message ||
-          'Failed to fetch financial news. Please check your network or API key and try again.',
+        errorMessage: message,
         rawResponse: '',
         groundingSources: [],
         items: [],
@@ -132,8 +140,13 @@ export default function App() {
         timestamp: Date.now(),
       });
     } finally {
+      abortRef.current = null;
       setIsLoading(false);
     }
+  };
+
+  const handleCancelResearch = () => {
+    abortRef.current?.abort();
   };
 
   const handleResearch = async (e: React.FormEvent) => {
@@ -182,6 +195,11 @@ export default function App() {
   const handleClearHistory = async () => {
     await clearAllResearchRuns();
     setHistory([]);
+  };
+
+  const handleDeleteHistoryItem = async (id: string) => {
+    await deleteResearchRun(id);
+    setHistory((prev) => prev.filter((item) => item.id !== id));
   };
 
   const runHistoryQuery = (item: StoredResearchRun) => {
@@ -305,9 +323,22 @@ export default function App() {
                         </div>
                         <div className="flex items-center justify-between text-[10px] text-slate-400">
                           <span>{new Date(item.timestamp).toLocaleString()}</span>
-                          <span className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 font-mono">
-                            {item.summary?.verifiedRows ?? item.items?.length ?? 0} verified
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 font-mono">
+                              {item.summary?.verifiedRows ?? item.items?.length ?? 0} verified
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteHistoryItem(item.id);
+                              }}
+                              className="p-1 rounded text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-colors"
+                              title="Delete this entry"
+                              aria-label={`Delete history entry: ${item.query}`}
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -680,8 +711,14 @@ export default function App() {
                   : 'Agent is searching & validating findings...'}
               </h3>
               <p className="text-slate-500 max-w-sm">
-                Scanning credible financial sources, running Zod schema validation, and verifying source integrity.
+                Scanning credible financial sources, running schema validation, and verifying source integrity.
               </p>
+              <button
+                onClick={handleCancelResearch}
+                className="mt-6 px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:text-rose-600 hover:border-rose-200 transition-colors"
+              >
+                Cancel Research
+              </button>
             </motion.div>
           )}
 

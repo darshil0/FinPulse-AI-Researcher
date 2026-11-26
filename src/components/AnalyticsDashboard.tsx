@@ -10,14 +10,22 @@ interface AnalyticsDashboardProps {
   items: ValidatedNewsItem[];
 }
 
-const COLORS = ['#10b981', '#f43f5e', '#64748b']; // Emerald, Rose, Slate for Pos, Neg, Neut
-const IMPACT_COLORS = ['#e11d48', '#f59e0b', '#64748b']; // Rose-600, Amber-500, Slate-500 for High, Medium, Low
+const SENTIMENT_COLORS: Record<string, string> = {
+  Positive: '#10b981',
+  Negative: '#f43f5e',
+  Neutral: '#64748b',
+};
+const IMPACT_COLORS: Record<string, string> = {
+  High: '#e11d48',
+  Medium: '#f59e0b',
+  Low: '#64748b',
+};
 const CATEGORY_COLORS = ['#6366f1', '#a855f7', '#ec4899', '#f97316', '#eab308', '#8b5cf6', '#06b6d4'];
 
 export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ items }) => {
   const newsData = items.map((i) => i.data);
 
-  // Process Sentiment Data
+  // Process Sentiment Data (zero-value slices excluded; colors keyed by name)
   const sentimentData = [
     { name: 'Positive', value: newsData.filter(i => (i.Sentiment || '').toLowerCase() === 'positive').length },
     { name: 'Negative', value: newsData.filter(i => (i.Sentiment || '').toLowerCase() === 'negative').length },
@@ -61,8 +69,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ items })
                 paddingAngle={5}
                 dataKey="value"
               >
-                {sentimentData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                {sentimentData.map((entry) => (
+                  <Cell key={`cell-${entry.name}`} fill={SENTIMENT_COLORS[entry.name]} />
                 ))}
               </Pie>
               <ReTooltip 
@@ -95,8 +103,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ items })
                 paddingAngle={5}
                 dataKey="value"
               >
-                {impactData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={IMPACT_COLORS[index % IMPACT_COLORS.length]} />
+                {impactData.map((entry) => (
+                  <Cell key={`cell-${entry.name}`} fill={IMPACT_COLORS[entry.name]} />
                 ))}
               </Pie>
               <ReTooltip

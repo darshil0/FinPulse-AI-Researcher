@@ -192,8 +192,10 @@ export const TraceabilityPanel: React.FC<TraceabilityPanelProps> = ({
           </div>
           <div className="text-sm font-semibold text-white capitalize">{status.replace('_', ' ')}</div>
           <div className="text-[11px] text-slate-400 font-mono space-y-0.5">
-            <div>IndexedDB: Saved</div>
             <div>Export Ready: CSV & XLSX</div>
+            <div>
+              Persisted State: <span className="text-slate-200">{status.replace('_', ' ')}</span>
+            </div>
           </div>
         </div>
       </div>

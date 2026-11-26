@@ -1,0 +1,2 @@
+[functions.gemini-research]
+verify_jwt = false

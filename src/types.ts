@@ -17,12 +17,3 @@ export type SortConfig = {
   key: keyof NewsItem | null;
   direction: 'asc' | 'desc';
 };
-
-export interface ResearchHistoryItem {
-  id: string;
-  query: string;
-  timestamp: number;
-  startDate?: string;
-  endDate?: string;
-  itemCount: number;
-}

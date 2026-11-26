@@ -47,22 +47,24 @@ export type ResearchErrorCode =
   | 'PROVIDER_ERROR'
   | 'UNPARSEABLE_OUTPUT'
   | 'CSV_PARSE_ERROR'
-  | 'INVALID_RESPONSE_STRUCTURE';
+  | 'INVALID_RESPONSE_STRUCTURE'
+  | 'INVALID_DATE_RANGE';
 
-// Zod Schema for strict validation
-const UrlSchema = z.string().trim().refine((url) => {
-  if (!url || url === 'N/A') return false;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}, { message: 'Source_URL must be a valid http or https URL' });
+const UrlSchema = z
+  .string()
+  .trim()
+  .refine((url) => {
+    if (!url || url === 'N/A') return false;
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, { message: 'Source_URL must be a valid http or https URL' });
 
 const DateSchema = z.string().trim().refine((dateStr) => {
   if (!dateStr || dateStr === 'N/A') return false;
-  // Match YYYY-MM-DD or standard parseable date string
   const d = new Date(dateStr);
   return !isNaN(d.getTime());
 }, { message: 'Date must be a valid date (e.g. YYYY-MM-DD)' });
@@ -86,13 +88,57 @@ export const RawNewsItemSchema = z.object({
   Sentiment_Explanation: z.string().trim().min(1, 'Sentiment Explanation is required'),
 });
 
+const FIELD_TO_CODE: Partial<Record<keyof NewsItem, string>> = {
+  Date: 'MISSING_DATE',
+  Source_URL: 'MISSING_SOURCE_URL',
+};
+
+function issueFromZodError(field: string, message: string, rawValue?: string): ValidationIssue {
+  if (field === 'Source_URL') {
+    return {
+      field,
+      code: 'INVALID_URL_SCHEME',
+      message: `Source URL '${rawValue ?? ''}' is not a valid HTTP/HTTPS URL`,
+      rawValue,
+    };
+  }
+  if (field === 'Date') {
+    return {
+      field,
+      code: 'INVALID_DATE',
+      message: `Date '${rawValue ?? ''}' is not a valid date`,
+      rawValue,
+    };
+  }
+  if (field === 'Sentiment') {
+    return {
+      field,
+      code: 'INVALID_SENTIMENT',
+      message: `Sentiment '${rawValue ?? ''}' is invalid. Allowed: ${SENTIMENT_ENUM.join(', ')}`,
+      rawValue,
+    };
+  }
+  if (field === 'Impact') {
+    return {
+      field,
+      code: 'INVALID_IMPACT',
+      message: `Impact '${rawValue ?? ''}' is invalid. Allowed: ${IMPACT_ENUM.join(', ')}`,
+      rawValue,
+    };
+  }
+  return {
+    field,
+    code: FIELD_TO_CODE[field as keyof NewsItem] ?? 'MISSING_REQUIRED_FIELD',
+    message,
+    rawValue,
+  };
+}
+
 /**
- * Validates a single raw news item and produces a ValidatedNewsItem
+ * Validates a single raw news item against the Zod schema and produces a
+ * ValidatedNewsItem. Invalid rows are retained for traceability, not discarded.
  */
 export function validateNewsItem(raw: Record<string, any>, rowIndex: number): ValidatedNewsItem {
-  const issues: ValidationIssue[] = [];
-
-  // Safe string coercion for raw dictionary
   const item: NewsItem = {
     Date: String(raw.Date ?? ''),
     Time: String(raw.Time ?? ''),
@@ -103,120 +149,44 @@ export function validateNewsItem(raw: Record<string, any>, rowIndex: number): Va
     Category: String(raw.Category ?? ''),
     Source_Name: String(raw.Source_Name ?? ''),
     Source_URL: String(raw.Source_URL ?? ''),
-    Sentiment: String(raw.Sentiment ?? ''),
-    Impact: String(raw.Impact ?? ''),
+    Sentiment: String(raw.Sentiment ?? '').trim(),
+    Impact: String(raw.Impact ?? '').trim(),
     Sentiment_Explanation: String(raw.Sentiment_Explanation ?? ''),
   };
 
-  // Check required presence / empty strings
-  const requiredFields: Array<keyof NewsItem> = [
-    'Date',
-    'Headline',
-    'Short_Summary',
-    'Primary_Ticker_or_Entity',
-    'Region_or_Market',
-    'Category',
-    'Source_Name',
-    'Source_URL',
-    'Sentiment',
-    'Impact',
-  ];
+  const issues: ValidationIssue[] = [];
 
-  for (const field of requiredFields) {
-    const val = item[field];
-    if (!val || val.trim() === '' || val.trim() === 'N/A') {
-      if (field === 'Source_URL') {
-        issues.push({
-          field,
-          code: 'MISSING_SOURCE_URL',
-          message: 'Source URL is missing or set to N/A',
-          rawValue: val,
-        });
-      } else if (field === 'Date') {
-        issues.push({
-          field,
-          code: 'MISSING_DATE',
-          message: 'Date is missing or set to N/A',
-          rawValue: val,
-        });
-      } else {
-        issues.push({
-          field,
-          code: 'MISSING_REQUIRED_FIELD',
-          message: `Required field '${field}' is empty or missing`,
-          rawValue: val,
-        });
-      }
-    }
-  }
-
-  // Validate Date format if present
-  if (item.Date && item.Date !== 'N/A' && !issues.some((i) => i.field === 'Date')) {
-    const dateParsed = new Date(item.Date);
-    if (isNaN(dateParsed.getTime())) {
-      issues.push({
-        field: 'Date',
-        code: 'INVALID_DATE',
-        message: `Date '${item.Date}' is not a valid date`,
-        rawValue: item.Date,
-      });
-    }
-  }
-
-  // Validate Source URL protocol if present
-  if (item.Source_URL && item.Source_URL !== 'N/A' && !issues.some((i) => i.field === 'Source_URL')) {
-    try {
-      const parsedUrl = new URL(item.Source_URL);
-      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-        issues.push({
-          field: 'Source_URL',
-          code: 'INVALID_URL_SCHEME',
-          message: `Source URL scheme '${parsedUrl.protocol}' is not supported. Must be http or https.`,
-          rawValue: item.Source_URL,
-        });
-      }
-    } catch {
-      issues.push({
-        field: 'Source_URL',
-        code: 'INVALID_URL',
-        message: `Source URL '${item.Source_URL}' is not a valid HTTP/HTTPS URL`,
-        rawValue: item.Source_URL,
-      });
-    }
-  }
-
-  // Validate Sentiment enum
-  const normalizedSentiment = item.Sentiment.trim();
-  const validSentiment = SENTIMENT_ENUM.find(
-    (s) => s.toLowerCase() === normalizedSentiment.toLowerCase()
+  // Case-insensitive enum normalization: map "positive" -> "Positive"
+  const normalizedSentiment = SENTIMENT_ENUM.find(
+    (s) => s.toLowerCase() === item.Sentiment.toLowerCase()
   );
-  if (!validSentiment) {
-    issues.push({
-      field: 'Sentiment',
-      code: 'INVALID_SENTIMENT',
-      message: `Sentiment '${item.Sentiment}' is invalid. Allowed: ${SENTIMENT_ENUM.join(', ')}`,
-      rawValue: item.Sentiment,
-    });
-  }
-
-  // Validate Impact enum
-  const normalizedImpact = item.Impact.trim();
-  const validImpact = IMPACT_ENUM.find(
-    (i) => i.toLowerCase() === normalizedImpact.toLowerCase()
+  const normalizedImpact = IMPACT_ENUM.find(
+    (i) => i.toLowerCase() === item.Impact.toLowerCase()
   );
-  if (!validImpact) {
-    issues.push({
-      field: 'Impact',
-      code: 'INVALID_IMPACT',
-      message: `Impact '${item.Impact}' is invalid. Allowed: ${IMPACT_ENUM.join(', ')}`,
-      rawValue: item.Impact,
-    });
+
+  const candidate = {
+    ...item,
+    Sentiment: normalizedSentiment ?? item.Sentiment,
+    Impact: normalizedImpact ?? item.Impact,
+  };
+
+  const result = RawNewsItemSchema.safeParse(candidate);
+
+  if (!result.success) {
+    const seen = new Set<string>();
+    for (const zodIssue of result.error.issues) {
+      const field = String(zodIssue.path[0] ?? 'Row');
+      if (seen.has(field)) continue;
+      seen.add(field);
+      issues.push(
+        issueFromZodError(field, zodIssue.message, item[field as keyof NewsItem])
+      );
+    }
   }
 
-  // Check for extra or missing unknown schema columns from raw dictionary
+  // Unexpected extra columns from the model output
   const expectedKeys = new Set(Object.keys(item));
-  const rawKeys = Object.keys(raw);
-  const unexpectedKeys = rawKeys.filter((k) => !expectedKeys.has(k));
+  const unexpectedKeys = Object.keys(raw).filter((k) => !expectedKeys.has(k));
   if (unexpectedKeys.length > 0) {
     issues.push({
       field: 'Row',
@@ -228,11 +198,10 @@ export function validateNewsItem(raw: Record<string, any>, rowIndex: number): Va
 
   const isVerified = issues.length === 0;
 
-  // Safe normalized item
   const normalizedItem: NewsItem = {
     ...item,
-    Sentiment: validSentiment || item.Sentiment,
-    Impact: validImpact || item.Impact,
+    Sentiment: normalizedSentiment || item.Sentiment,
+    Impact: normalizedImpact || item.Impact,
   };
 
   const id = `row-${rowIndex}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -248,7 +217,8 @@ export function validateNewsItem(raw: Record<string, any>, rowIndex: number): Va
 }
 
 /**
- * Validates an array of parsed rows and returns validated items along with a validation summary
+ * Validates an array of parsed rows and returns validated items along with a
+ * validation summary.
  */
 export function validateResearchResults(
   rows: Record<string, any>[],
@@ -256,12 +226,11 @@ export function validateResearchResults(
 ): { items: ValidatedNewsItem[]; summary: ValidationSummary } {
   const items = rows.map((row, idx) => validateNewsItem(row, idx));
   const verifiedCount = items.filter((i) => i.isVerified).length;
-  const needsReviewCount = items.length - verifiedCount;
 
   const summary: ValidationSummary = {
     totalRows: items.length,
     verifiedRows: verifiedCount,
-    needsReviewRows: needsReviewCount,
+    needsReviewRows: items.length - verifiedCount,
     hasParseErrors: csvParseErrors.length > 0,
     parseErrors: csvParseErrors,
   };

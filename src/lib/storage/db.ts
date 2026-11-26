@@ -25,6 +25,9 @@ const DB_VERSION = 1;
 const STORE_NAME = 'research_runs';
 const MIGRATION_KEY = 'finpulse_migrated_v1';
 const LEGACY_STORAGE_KEY = 'finpulse_history';
+const FALLBACK_STORAGE_KEY = 'finpulse_runs_fallback';
+// Matches the localStorage fallback cap so behavior is consistent either way.
+const MAX_STORED_RUNS = 200;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -51,18 +54,34 @@ export async function saveResearchRun(run: StoredResearchRun): Promise<void> {
   try {
     const db = await getDB();
     await db.put(STORE_NAME, run);
+    await pruneOldRuns(db);
   } catch (err) {
     console.warn('Failed to save research run to IndexedDB:', err);
     // Fallback to localStorage if IndexedDB fails
     try {
-      const existing = localStorage.getItem('finpulse_runs_fallback');
+      const existing = localStorage.getItem(FALLBACK_STORAGE_KEY);
       const runs: StoredResearchRun[] = existing ? JSON.parse(existing) : [];
-      const updated = [run, ...runs.filter((r) => r.id !== run.id)].slice(0, 20);
-      localStorage.setItem('finpulse_runs_fallback', JSON.stringify(updated));
+      const updated = [run, ...runs.filter((r) => r.id !== run.id)].slice(0, MAX_STORED_RUNS);
+      localStorage.setItem(FALLBACK_STORAGE_KEY, JSON.stringify(updated));
     } catch {
       // Ignore fallback error
     }
   }
+}
+
+async function pruneOldRuns(db: IDBPDatabase): Promise<void> {
+  const tx = db.transaction(STORE_NAME, 'readwrite');
+  const index = tx.store.index('timestamp');
+  let cursor = await index.openCursor(null, 'prev');
+  let seen = 0;
+  while (cursor) {
+    seen++;
+    if (seen > MAX_STORED_RUNS) {
+      await cursor.delete();
+    }
+    cursor = await cursor.continue();
+  }
+  await tx.done;
 }
 
 export async function getAllResearchRuns(): Promise<StoredResearchRun[]> {
@@ -74,7 +93,7 @@ export async function getAllResearchRuns(): Promise<StoredResearchRun[]> {
   } catch (err) {
     console.warn('Failed to read research runs from IndexedDB:', err);
     try {
-      const fallback = localStorage.getItem('finpulse_runs_fallback');
+      const fallback = localStorage.getItem(FALLBACK_STORAGE_KEY);
       return fallback ? JSON.parse(fallback) : [];
     } catch {
       return [];
@@ -86,6 +105,18 @@ export async function deleteResearchRun(id: string): Promise<void> {
   try {
     const db = await getDB();
     await db.delete(STORE_NAME, id);
+    try {
+      const fallback = localStorage.getItem(FALLBACK_STORAGE_KEY);
+      if (fallback) {
+        const runs: StoredResearchRun[] = JSON.parse(fallback);
+        localStorage.setItem(
+          FALLBACK_STORAGE_KEY,
+          JSON.stringify(runs.filter((r) => r.id !== id))
+        );
+      }
+    } catch {
+      // Ignore fallback cleanup errors
+    }
   } catch (err) {
     console.warn('Failed to delete research run from IndexedDB:', err);
   }
@@ -96,7 +127,7 @@ export async function clearAllResearchRuns(): Promise<void> {
     const db = await getDB();
     await db.clear(STORE_NAME);
     localStorage.removeItem(LEGACY_STORAGE_KEY);
-    localStorage.removeItem('finpulse_runs_fallback');
+    localStorage.removeItem(FALLBACK_STORAGE_KEY);
   } catch (err) {
     console.warn('Failed to clear research runs from IndexedDB:', err);
   }

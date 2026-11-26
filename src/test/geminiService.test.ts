@@ -1,34 +1,41 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { researchFinancialNews } from '../services/geminiService';
 
-const mockGenerateContent = vi.fn();
+const mockFetch = vi.fn();
 
-vi.mock('@google/genai', () => {
+vi.stubGlobal('fetch', mockFetch);
+
+function okResponse(body: unknown) {
   return {
-    GoogleGenAI: class {
-      models = {
-        generateContent: mockGenerateContent,
-      };
-    },
+    ok: true,
+    status: 200,
+    json: async () => body,
   };
-});
+}
 
-describe('Gemini Research Service Resilience', () => {
-  const originalEnv = process.env.GEMINI_API_KEY;
+describe('Gemini Research Service (proxy)', () => {
+  const originalEnvUrl = import.meta.env.VITE_SUPABASE_URL;
+  const originalEnvKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
   beforeEach(() => {
-    process.env.GEMINI_API_KEY = 'test-api-key';
-    mockGenerateContent.mockReset();
+    mockFetch.mockReset();
+    vi.stubEnv('VITE_SUPABASE_URL', 'https://example.supabase.co');
+    vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'test-anon-key');
   });
 
   afterEach(() => {
-    process.env.GEMINI_API_KEY = originalEnv;
+    vi.stubEnv('VITE_SUPABASE_URL', originalEnvUrl);
+    vi.stubEnv('VITE_SUPABASE_ANON_KEY', originalEnvKey);
   });
 
   it('maps unparseable model output to status unparseable_model_output', async () => {
-    mockGenerateContent.mockResolvedValue({
-      text: 'This is invalid plain text output without CSV headers',
-    });
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: 'This is invalid plain text output without CSV headers',
+        groundingSources: [],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
 
     const result = await researchFinancialNews('test query');
     expect(result.status).toBe('unparseable_model_output');
@@ -39,34 +46,77 @@ describe('Gemini Research Service Resilience', () => {
   it('maps empty valid CSV header output to status no_results', async () => {
     const headerOnly =
       'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation';
-    mockGenerateContent.mockResolvedValue({
-      text: headerOnly,
-    });
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: headerOnly,
+        groundingSources: [],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
 
     const result = await researchFinancialNews('test query');
     expect(result.status).toBe('no_results');
     expect(result.items).toHaveLength(0);
   });
 
-  it('retries on retryable 500 error up to maxRetries cap', async () => {
-    const error500 = new Error('500 Internal Server Error');
-    (error500 as any).status = 500;
+  it('returns network_error with RATE_LIMITED code when the proxy reports 429', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({ error: 'The AI research provider is rate limited.' }),
+    });
 
-    mockGenerateContent.mockRejectedValue(error500);
+    const result = await researchFinancialNews('test query');
+    expect(result.status).toBe('network_error');
+    expect(result.errorCode).toBe('RATE_LIMITED');
+  });
 
-    const result = await researchFinancialNews('test query', undefined, undefined, undefined, 2);
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+  it('returns network_error without calling the proxy repeatedly on client errors', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'Unauthorized' }),
+    });
+
+    const result = await researchFinancialNews('test query');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('network_error');
   });
 
-  it('does not retry non-retryable 401 client error', async () => {
-    const error401 = new Error('401 Unauthorized');
-    (error401 as any).status = 401;
+  it('parses valid CSV output into validated items', async () => {
+    const csv =
+      'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation\n' +
+      '2025-02-21,14:05,"Company X beats earnings","Company X reported quarterly earnings above expectations.","XCO","US","Earnings","Reuters","https://example.com/a","Positive","High","Earnings beat drives stock higher."';
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: csv,
+        groundingSources: [{ title: 'Reuters', url: 'https://example.com/a' }],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
 
-    mockGenerateContent.mockRejectedValue(error401);
+    const result = await researchFinancialNews('test query');
+    expect(result.status).toBe('success');
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].isVerified).toBe(true);
+    expect(result.groundingSources).toHaveLength(1);
+  });
 
-    const result = await researchFinancialNews('test query', undefined, undefined, undefined, 3);
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
-    expect(result.status).toBe('network_error');
+  it('classifies all-invalid rows as partial_success, not unparseable', async () => {
+    const csv =
+      'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation\n' +
+      'not-a-date,,,,,,,,"N/A",Bogus,Bogus,N/A explanation';
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: csv,
+        groundingSources: [],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
+
+    const result = await researchFinancialNews('test query');
+    expect(result.status).toBe('partial_success');
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].isVerified).toBe(false);
   });
 });
