@@ -14,13 +14,11 @@ export interface ExportOptions {
   summary?: ValidationSummary;
 }
 
-// Neutralize CSV/Excel formula injection: values that begin with =, +, - or @
+// Neutralize CSV/Excel formula injection: values that begin with =, +, -, @, tab, or CR
 // would otherwise be interpreted as formulas by spreadsheet applications.
-function sanitizeCell(value: string): string {
-  if (/^[=+@]/.test(value)) {
-    return `'${value}`;
-  }
-  if (/^-/.test(value)) {
+export function sanitizeCell(value: string): string {
+  if (!value) return value;
+  if (/^[=+\-@\t\r]/.test(value)) {
     return `'${value}`;
   }
   return value;
@@ -54,22 +52,27 @@ export function exportToXLSX(
   const workbook = XLSX.utils.book_new();
 
   // 1. Sheet 1: Research Results
-  const resultsData = filteredItems.map((item) => ({
-    'Verification Status': item.verificationStatus,
-    'Validation Issues': item.validationIssues.map((i) => `${i.field}: ${i.message}`).join('; ') || 'None',
-    'Date': item.data.Date,
-    'Time': item.data.Time,
-    'Primary Ticker / Entity': item.data.Primary_Ticker_or_Entity,
-    'Headline': item.data.Headline,
-    'Short Summary': item.data.Short_Summary,
-    'Category': item.data.Category,
-    'Region / Market': item.data.Region_or_Market,
-    'Sentiment': item.data.Sentiment,
-    'Impact': item.data.Impact,
-    'Sentiment Explanation': item.data.Sentiment_Explanation,
-    'Source Name': item.data.Source_Name,
-    'Source URL': item.data.Source_URL,
-  }));
+  const resultsData = filteredItems.map((item) => {
+    const safeData = sanitizeItemData(item.data);
+    const issuesText =
+      item.validationIssues.map((i) => `${i.field}: ${i.message}`).join('; ') || 'None';
+    return {
+      'Verification Status': sanitizeCell(item.verificationStatus),
+      'Validation Issues': sanitizeCell(issuesText),
+      'Date': safeData.Date,
+      'Time': safeData.Time,
+      'Primary Ticker / Entity': safeData.Primary_Ticker_or_Entity,
+      'Headline': safeData.Headline,
+      'Short Summary': safeData.Short_Summary,
+      'Category': safeData.Category,
+      'Region / Market': safeData.Region_or_Market,
+      'Sentiment': safeData.Sentiment,
+      'Impact': safeData.Impact,
+      'Sentiment Explanation': safeData.Sentiment_Explanation,
+      'Source Name': safeData.Source_Name,
+      'Source URL': safeData.Source_URL,
+    };
+  });
 
   const worksheet = XLSX.utils.json_to_sheet(resultsData);
 
@@ -100,12 +103,12 @@ export function exportToXLSX(
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Research Results');
 
   // 2. Sheet 2: Traceability & Audit Metadata
-  const metadataRows: any[] = [
-    { Property: 'Search Query', Value: options.query || 'N/A' },
-    { Property: 'Date Range Start', Value: options.startDate || 'N/A' },
-    { Property: 'Date Range End', Value: options.endDate || 'N/A' },
-    { Property: 'Run Status', Value: options.status || 'N/A' },
-    { Property: 'AI Model', Value: options.modelName || 'N/A' },
+  const metadataRows: Array<{ Property: string; Value: string | number }> = [
+    { Property: 'Search Query', Value: sanitizeCell(options.query || 'N/A') },
+    { Property: 'Date Range Start', Value: sanitizeCell(options.startDate || 'N/A') },
+    { Property: 'Date Range End', Value: sanitizeCell(options.endDate || 'N/A') },
+    { Property: 'Run Status', Value: sanitizeCell(options.status || 'N/A') },
+    { Property: 'AI Model', Value: sanitizeCell(options.modelName || 'N/A') },
     { Property: 'Export Date', Value: new Date().toISOString() },
     { Property: 'Total Rows Parsed', Value: options.summary?.totalRows ?? items.length },
     { Property: 'Verified Rows Count', Value: options.summary?.verifiedRows ?? items.filter((i) => i.isVerified).length },
@@ -118,8 +121,8 @@ export function exportToXLSX(
   if (options.groundingSources && options.groundingSources.length > 0) {
     options.groundingSources.forEach((src, idx) => {
       metadataRows.push({
-        Property: `Source ${idx + 1}: ${src.title || 'Web Search'}`,
-        Value: src.url || 'N/A',
+        Property: sanitizeCell(`Source ${idx + 1}: ${src.title || 'Web Search'}`),
+        Value: sanitizeCell(src.url || 'N/A'),
       });
     });
   } else {
@@ -135,8 +138,12 @@ export function exportToXLSX(
       item.validationIssues.forEach((issue) => {
         issueCount++;
         metadataRows.push({
-          Property: `Row ${idx + 1} (${item.data.Primary_Ticker_or_Entity || 'Entity'}) [${issue.field}]`,
-          Value: `[${issue.code}] ${issue.message} (Raw: "${issue.rawValue ?? ''}")`,
+          Property: sanitizeCell(
+            `Row ${idx + 1} (${item.data.Primary_Ticker_or_Entity || 'Entity'}) [${issue.field}]`
+          ),
+          Value: sanitizeCell(
+            `[${issue.code}] ${issue.message} (Raw: "${issue.rawValue ?? ''}")`
+          ),
         });
       });
     }
@@ -166,11 +173,14 @@ export function exportToCSV(
     ? items
     : items.filter((item) => item.isVerified);
 
-  const csvRows = filteredItems.map((item) => ({
-    'Verification Status': item.verificationStatus,
-    'Validation Issues': item.validationIssues.map((i) => i.message).join('; ') || 'None',
-    ...sanitizeItemData(item.data),
-  }));
+  const csvRows = filteredItems.map((item) => {
+    const issuesText = item.validationIssues.map((i) => i.message).join('; ') || 'None';
+    return {
+      'Verification Status': sanitizeCell(item.verificationStatus),
+      'Validation Issues': sanitizeCell(issuesText),
+      ...sanitizeItemData(item.data),
+    };
+  });
 
   const csv = Papa.unparse(csvRows);
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
