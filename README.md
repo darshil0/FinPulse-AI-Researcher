@@ -8,7 +8,7 @@ FinPulse AI Researcher is an institutional-grade financial news research, valida
 
 - [Key Features](#key-features)
 - [Architecture & Server-Side Boundary](#architecture--server-side-boundary)
-- [Data Integrity & Validation](#data-integrity--validation)
+- [Data Integrity](#data-integrity)
 - [Export & Security Protections](#export--security-protections)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
@@ -69,11 +69,22 @@ The client bundle **never** embeds or accesses `GEMINI_API_KEY` (`vite.config.ts
 
 ---
 
-## Data Integrity & Validation
+## Data Integrity
 
-Every parsed row is evaluated at runtime by `validateNewsItem` and `validateResearchResults` (`src/lib/validation/index.ts`).
+FinPulse enforces a strict runtime validation boundary in `src/lib/validation/index.ts` powered by Zod v4. Every parsed CSV row from the AI model passes through `validateNewsItem` and `validateResearchResults` before entering the UI, IndexedDB store, or export pipeline.
 
-### Expected 12-Column Schema (`RawNewsItemSchema`)
+### Zod Validation Schemas
+
+Before schema parsing, `validateNewsItem` extracts all 12 expected fields as strings and applies case-insensitive normalization to `Sentiment` and `Impact` (e.g., `"positive"` → `"Positive"`, `"high"` → `"High"`). The normalized candidate object is then evaluated with `RawNewsItemSchema.safeParse(...)`, composed of:
+
+- **`DateSchema`**: `z.string().trim().refine(...)` — rejects empty values and `"N/A"`, requiring a valid calendar date string parseable by `new Date(...)` (e.g., `YYYY-MM-DD`). Failures emit `INVALID_DATE`.
+- **`UrlSchema`**: `z.string().trim().refine(...)` — rejects empty values and `"N/A"` (`MISSING_SOURCE_URL`), parses the value via `new URL(...)`, and permits only `http:` or `https:` protocols (`INVALID_URL_SCHEME`).
+- **`RawNewsItemSchema`**: `z.object(...)` requiring:
+  - `Date` (`DateSchema`) and `Source_URL` (`UrlSchema`)
+  - Non-empty trimmed strings (`z.string().trim().min(1)`) for `Time`, `Headline`, `Short_Summary`, `Primary_Ticker_or_Entity`, `Region_or_Market`, `Category`, `Source_Name`, and `Sentiment_Explanation` (`MISSING_REQUIRED_FIELD`)
+  - `Sentiment` matching `SENTIMENT_ENUM` (`Positive`, `Negative`, `Neutral` → `INVALID_SENTIMENT`)
+  - `Impact` matching `IMPACT_ENUM` (`High`, `Medium`, `Low` → `INVALID_IMPACT`)
+- **Unexpected Column Detection**: Any parsed keys outside the 12 schema fields append an `UNEXPECTED_COLUMNS` `ValidationIssue`.
 
 | Column | Rule / Schema | Failure Issue Code |
 | :--- | :--- | :--- |
@@ -90,16 +101,18 @@ Every parsed row is evaluated at runtime by `validateNewsItem` and `validateRese
 | `Impact` | `IMPACT_ENUM` (`High`, `Medium`, `Low`, case-insensitive normalization) | `INVALID_IMPACT` |
 | `Sentiment_Explanation` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
 
-Any extra keys beyond the 12 schema columns generate an `UNEXPECTED_COLUMNS` validation issue.
+### Logic Behind `'Verified'` vs `'Needs Review'` Status Labels
 
-### `Verified` vs. `Needs review` Statuses
+Rather than silently dropping malformed AI output, `validateResearchResults` retains every parsed row as a `ValidatedNewsItem` and assigns its status strictly from `issues.length === 0`:
 
-Invalid rows are **preserved for full auditability** rather than silently discarded:
-
-| Verification Status | Criteria | Behavior in UI, Traceability & Exports |
-| :--- | :--- | :--- |
-| **`Verified`** (`isVerified: true`) | Passes all `RawNewsItemSchema` checks with zero `ValidationIssue` entries and no unexpected columns. | Shown with a green **Verified** badge, included in **All Rows** and **Verified Only** filters, and counted toward `summary.verifiedRows`. If every parsed row is verified, the run status is `success`. |
-| **`Needs review`** (`isVerified: false`; filter tab labeled **Needs Review**) | Fails one or more Zod schema constraints or contains unexpected columns. | Highlighted in amber with an issue-count badge, expandable field-level error diagnostics (`field`, `code`, `message`, `rawValue`), and raw row JSON inspection. Included in **All Rows** and **Needs Review** views (or excluded from Verified-only exports) and recorded in the XLSX `Traceability` sheet. If any parsed row needs review, the run status is `partial_success`. |
+1. **`Verified` (`isVerified: true`, `verificationStatus: 'Verified'`)**:
+   - Assigned **only** when `RawNewsItemSchema.safeParse` succeeds **and** no unexpected extra columns are present (`validationIssues.length === 0`).
+   - Badged green in `NewsTable` and `TraceabilityPanel`, selectable under **All Rows** and **Verified Only**, and counted toward `summary.verifiedRows`.
+   - When every parsed row in a run is `Verified`, the research run status is marked `success`.
+2. **`Needs Review` (`isVerified: false`, `verificationStatus: 'Needs review'`, labeled **Needs Review** in filter controls)**:
+   - Assigned whenever one or more schema checks fail (for example, missing `Time` or `Sentiment_Explanation`, an invalid date, missing/`javascript:` `Source_URL`, or out-of-enum `Sentiment`/`Impact`) or unexpected columns are detected.
+   - Deduplicates Zod errors per field via `issueFromZodError`, attaches structured diagnostics (`field`, `code`, `message`, `rawValue`) alongside the original `raw` row object, and highlights the row in amber so analysts can inspect or filter **Needs Review** items, exclude them from verified-only exports, and audit them in the XLSX `Traceability` sheet.
+   - When one or more parsed rows are `Needs review` (even if all rows fail), `researchFinancialNews` classifies the run as `partial_success`.
 
 ---
 
@@ -140,9 +153,9 @@ Invalid rows are **preserved for full auditability** rather than silently discar
 │   ├── lib/
 │   │   ├── export/excel.ts               # Shared sanitizeCell, CSV & XLSX exporters
 │   │   ├── storage/db.ts                 # IndexedDB persistence + localStorage fallback
-│   │   └── validation/index.ts           # Zod schemas & validateResearchResults
+│   │   └── validation/                   # Zod schemas, validation logic & unit tests
 │   ├── services/geminiService.ts         # Edge Function client, AbortSignal & CSV parser
-│   ├── test/                             # Vitest suites (24 tests across 5 files)
+│   ├── test/ & src/tests/                # Vitest suites (38 tests across 7 files)
 │   ├── App.tsx                           # Main application UI & state orchestration
 │   ├── types.ts                          # Shared NewsItem & SortConfig types
 │   └── vite-env.d.ts                     # Vite client environment typings
@@ -157,7 +170,7 @@ Invalid rows are **preserved for full auditability** rather than silently discar
 
 ### Prerequisites
 
-- **Node.js 20+** and **npm**
+- **Node.js 22+** and **npm** (required by `vitest` and `@supabase/supabase-js`)
 - A **Supabase project** with the Supabase CLI (or dashboard) to deploy the Edge Function
 - A **Google Gemini API key**
 
@@ -197,7 +210,7 @@ npm run dev
 # Run TypeScript type checking (tsc --noEmit)
 npm run lint
 
-# Run the Vitest unit test suite (24 tests across 5 suites)
+# Run the Vitest unit test suite (38 tests across 7 suites)
 npm test
 
 # Build the production bundle into dist/

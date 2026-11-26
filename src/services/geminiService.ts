@@ -13,6 +13,93 @@ export const GEMINI_CONFIG = {
   MODEL_NAME: "gemini-3-flash-preview",
 };
 
+export const THROTTLE_CONFIG = {
+  MIN_INTERVAL_MS: 1000,
+  WINDOW_MS: 60_000,
+  MAX_REQUESTS_PER_WINDOW: 10,
+};
+
+let lastRequestTime = 0;
+let requestTimestamps: number[] = [];
+let throttleQueue: Promise<void> = Promise.resolve();
+
+export function resetThrottleState(): void {
+  lastRequestTime = 0;
+  requestTimestamps = [];
+  throttleQueue = Promise.resolve();
+}
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve(false);
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function acquireThrottleSlot(
+  signal?: AbortSignal
+): Promise<'ok' | 'aborted' | 'rate_limited'> {
+  if (signal?.aborted) return 'aborted';
+
+  let outcome: 'ok' | 'aborted' | 'rate_limited' = 'ok';
+
+  const next = throttleQueue.then(async () => {
+    if (signal?.aborted) {
+      outcome = 'aborted';
+      return;
+    }
+
+    const now = Date.now();
+    requestTimestamps = requestTimestamps.filter(
+      (ts) => now - ts < THROTTLE_CONFIG.WINDOW_MS
+    );
+
+    if (requestTimestamps.length >= THROTTLE_CONFIG.MAX_REQUESTS_PER_WINDOW) {
+      outcome = 'rate_limited';
+      return;
+    }
+
+    const elapsed = lastRequestTime > 0 ? now - lastRequestTime : THROTTLE_CONFIG.MIN_INTERVAL_MS;
+    const waitMs = Math.max(0, THROTTLE_CONFIG.MIN_INTERVAL_MS - elapsed);
+
+    if (waitMs > 0) {
+      const completed = await sleepWithAbort(waitMs, signal);
+      if (!completed || signal?.aborted) {
+        outcome = 'aborted';
+        return;
+      }
+    }
+
+    const acquiredAt = Date.now();
+    requestTimestamps = requestTimestamps.filter(
+      (ts) => acquiredAt - ts < THROTTLE_CONFIG.WINDOW_MS
+    );
+    if (requestTimestamps.length >= THROTTLE_CONFIG.MAX_REQUESTS_PER_WINDOW) {
+      outcome = 'rate_limited';
+      return;
+    }
+
+    lastRequestTime = acquiredAt;
+    requestTimestamps.push(acquiredAt);
+    outcome = 'ok';
+  });
+
+  throttleQueue = next.catch(() => {});
+  await next;
+  return outcome;
+}
+
 export interface GroundingSource {
   title?: string;
   url?: string;
@@ -72,6 +159,18 @@ export async function researchFinancialNews(
     return errorResult(
       'PROVIDER_ERROR',
       'Research service is not configured. Please try again later.',
+      timestamp
+    );
+  }
+
+  const slot = await acquireThrottleSlot(signal);
+  if (slot === 'aborted') {
+    return errorResult('NETWORK_FAILURE', 'Request was cancelled by user.', timestamp);
+  }
+  if (slot === 'rate_limited') {
+    return errorResult(
+      'RATE_LIMITED',
+      'Too many research requests in a short period. Please wait a moment before trying again.',
       timestamp
     );
   }

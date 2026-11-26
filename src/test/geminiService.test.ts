@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { researchFinancialNews } from '../services/geminiService';
+import {
+  researchFinancialNews,
+  resetThrottleState,
+  THROTTLE_CONFIG,
+} from '../services/geminiService';
 
 const mockFetch = vi.fn();
 
@@ -19,11 +23,13 @@ describe('Gemini Research Service (proxy)', () => {
 
   beforeEach(() => {
     mockFetch.mockReset();
+    resetThrottleState();
     vi.stubEnv('VITE_SUPABASE_URL', 'https://example.supabase.co');
     vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'test-anon-key');
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.stubEnv('VITE_SUPABASE_URL', originalEnvUrl);
     vi.stubEnv('VITE_SUPABASE_ANON_KEY', originalEnvKey);
   });
@@ -118,5 +124,99 @@ describe('Gemini Research Service (proxy)', () => {
     expect(result.status).toBe('partial_success');
     expect(result.items).toHaveLength(1);
     expect(result.items[0].isVerified).toBe(false);
+  });
+
+  it('spaces rapid-fire requests by at least MIN_INTERVAL_MS', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+    const headerOnly =
+      'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation';
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: headerOnly,
+        groundingSources: [],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
+
+    const p1 = researchFinancialNews('query 1');
+    await vi.runAllTimersAsync();
+    await p1;
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    const p2 = researchFinancialNews('query 2');
+    // Immediately after dispatch, the second call is throttled before hitting fetch
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(THROTTLE_CONFIG.MIN_INTERVAL_MS);
+    await p2;
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts a queued throttled request without calling fetch', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+    const headerOnly =
+      'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation';
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: headerOnly,
+        groundingSources: [],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
+
+    const first = researchFinancialNews('query 1');
+    await vi.runAllTimersAsync();
+    await first;
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    const controller = new AbortController();
+    const second = researchFinancialNews('query 2', '', '', controller.signal);
+    await Promise.resolve();
+    controller.abort();
+
+    const result = await second;
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('network_error');
+    expect(result.errorMessage).toContain('cancelled');
+  });
+
+  it('rejects burst requests exceeding MAX_REQUESTS_PER_WINDOW with RATE_LIMITED', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+    const headerOnly =
+      'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation';
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: headerOnly,
+        groundingSources: [],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
+
+    for (let i = 0; i < THROTTLE_CONFIG.MAX_REQUESTS_PER_WINDOW; i++) {
+      const p = researchFinancialNews(`query ${i}`);
+      await vi.advanceTimersByTimeAsync(THROTTLE_CONFIG.MIN_INTERVAL_MS);
+      await p;
+    }
+
+    expect(mockFetch).toHaveBeenCalledTimes(THROTTLE_CONFIG.MAX_REQUESTS_PER_WINDOW);
+
+    const burstResult = await researchFinancialNews('overflow query');
+    expect(mockFetch).toHaveBeenCalledTimes(THROTTLE_CONFIG.MAX_REQUESTS_PER_WINDOW);
+    expect(burstResult.status).toBe('network_error');
+    expect(burstResult.errorCode).toBe('RATE_LIMITED');
+
+    // Once the sliding window expires, requests succeed again
+    await vi.advanceTimersByTimeAsync(THROTTLE_CONFIG.WINDOW_MS);
+    const recovered = await researchFinancialNews('recovered query');
+    expect(mockFetch).toHaveBeenCalledTimes(THROTTLE_CONFIG.MAX_REQUESTS_PER_WINDOW + 1);
+    expect(recovered.status).toBe('no_results');
   });
 });
