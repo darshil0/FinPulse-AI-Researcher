@@ -23,7 +23,7 @@ All notable changes to this project will be documented in this file.
   - `src/tests/export.test.ts` (5 tests) & `src/test/export.test.ts` (4 tests): Formula-injection sanitization tests (`=HYPERLINK`, `=`, `+`, `-`, `@`, `\t`, `\r`) across CSV and XLSX exports plus `URL.revokeObjectURL` cleanup.
   - `src/test/geminiService.test.ts` (10 tests): Supabase proxy calls, HTTP 429/401 handling, unparseable output, `partial_success` classification, client-side interval/burst throttling, and `AbortSignal` cancellation.
   - `src/test/validation.test.ts` (8 tests), `src/test/db.test.ts` (3 tests), and `src/test/components.test.tsx` (3 tests).
-- **Documentation & Env Alignment**: Updated `README.md` (server-side Gemini proxy architecture, required env vars & Edge Function deployment, Data Integrity Zod schemas, `Verified` vs. `Needs review` structure, and accurate test/CI counts), `CHANGELOG.md`, and `.env.example`.
+- **Documentation & Metadata Alignment**: Updated `README.md` (server-side Gemini proxy architecture, required env vars & Edge Function deployment, Data Integrity Zod schemas, `Verified` vs. `Needs review` structure, and accurate test/CI counts), `CHANGELOG.md`, `.env.example`, `.bolt/memory.md` (resolved architecture and testing state), and `index.html` (removed legacy `bolt.new` OpenGraph/Twitter image URLs and synced metadata with `metadata.json`).
 - **TypeScript Configuration**: Excluded `supabase`, `dist`, and `node_modules` from the browser `tsconfig.json` check so `npm run lint` (`tsc --noEmit`) validates client and test code cleanly.
 
 ### Fixed

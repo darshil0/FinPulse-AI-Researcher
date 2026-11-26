@@ -2,34 +2,31 @@
 
 ## Product intent & audience
 
-- Financial news research tool powered by Gemini AI; fetches news from web content via the model and presents it with sentiment analysis, validation status, and traceability/audit metadata.
-- Users search by date range and other criteria, review results in a filtered table, view analytics dashboards, and export to CSV/XLSX.
-- Audience appears to be analysts/researchers who need auditable, validated news data with export capability.
+- Financial news research application powered by Gemini AI with Google Search grounding; retrieves market news via a server-side Supabase Edge Function proxy, validates every row at runtime with Zod, tracks full pipeline traceability, and exports formula-safe CSV and XLSX workbooks.
+- Users search by keyword and optional date range (`YYYY-MM-DD`), filter and sort validated results, inspect sentiment/impact/category analytics, and review audit trails.
+- Built for financial analysts and researchers who require auditable, schema-verified news datasets.
 
 ## Brand personality & voice
 
-- Professional, technical, audit-oriented tone (references to "strict runtime verification," "traceability," "validation issues").
+- Professional, technical, audit-oriented tone ("strict runtime verification", "traceability", "validation issues", "Needs review").
 
 ## Visual design & UX direction
 
-- Table-based results view with status filtering (Verified / Needs review / unparseable).
-- Analytics dashboard includes pie charts for sentiment breakdown; sentiment colors are assigned by meaning (green = Positive, etc.) but currently buggy (assigned by position after zero-value filtering).
-- Traceability panel shows numbered steps (research → validate → save), with hardcoded status labels.
-- Export produces multi-sheet XLSX with a detailed validation-issues traceability sheet alongside data.
+- Table-based results view (`NewsTable`) with verification status tabs (`All Rows`, `Verified Only`, `Needs Review`), column sorting, keyword/ticker filtering, expandable sentiment reasoning and validation diagnostics, and `http`-only external source links.
+- Analytics dashboard (`AnalyticsDashboard`) renders Recharts pie charts for Sentiment Breakdown and Market Impact with category-name-mapped colors (`Positive` emerald, `Negative` rose, `Neutral` slate; `High` rose, `Medium` amber, `Low` slate) alongside a Top Categories bar chart.
+- Traceability drawer (`TraceabilityPanel`) displays 4 pipeline steps (`1. Query Context`, `2. Model Extraction`, `3. Schema Validation`, `4. Persisted State`) with dynamic run status, grounding sources, row-level raw payloads, and raw LLM output.
+- Exporters (`src/lib/export/excel.ts`) generate formula-neutralized CSV files (`sanitizeCell` + immediate `URL.revokeObjectURL`) and two-sheet XLSX workbooks (`Research Results` and `Traceability`).
 
-## Decisions, constraints & rationale
+## Architecture, decisions & resolved constraints
 
-- **Stack:** Vite + React + TypeScript; Zod for schema definitions; Google Gemini SDK for AI calls; IndexedDB primary storage with localStorage fallback.
-- **AI architecture (current, problematic):** Gemini API key is embedded in the client bundle and the browser calls Google directly — identified as critical security issue; recommended move to a server proxy (e.g., Supabase Edge Function).
-- **Validation:** Zod schemas (`RawNewsItemSchema`, `UrlSchema`, `DateSchema`) are defined but not invoked at runtime; a manual `validateNewsItem` function is used instead and has drifted from the schema (weaker — doesn't require `Time` or `Sentiment_Explanation`).
-- **Storage caps inconsistent:** localStorage fallback caps at 20 runs; IndexedDB keeps everything.
-- **Abort/cancel:** `researchFinancialNews` accepts an `AbortSignal` but no UI wires it up; no cancel button exists.
-- **Testing:** 19 tests pass; type check clean; none of the identified issues are caught by existing automated checks.
+- **Stack:** Vite 6 + React 19 + TypeScript 5.8 + Tailwind CSS 4; Zod v4 for runtime schema validation; Supabase Edge Function (`Deno.serve`) calling `gemini-3-flash-preview` with `googleSearch` grounding; IndexedDB (`idb`) primary storage with `localStorage` fallback.
+- **Server-Side AI Boundary:** `GEMINI_API_KEY` is stored strictly on the server as a Supabase Edge Function secret (`supabase/functions/gemini-research/index.ts`); `src/services/geminiService.ts` sends requests to `/functions/v1/gemini-research` guarded by `enforceClientRateLimit` (`2,000 ms` minimum interval, `10` requests per `60s` sliding window).
+- **Runtime Zod Validation:** `validateNewsItem` in `src/lib/validation/index.ts` parses rows against `RawNewsItemSchema` (`DateSchema`, `UrlSchema`, `SENTIMENT_ENUM`, `IMPACT_ENUM`, and required non-empty strings including `Time` and `Sentiment_Explanation`), flags extra columns (`UNEXPECTED_COLUMNS`), and quarantines non-compliant rows as `Needs review` rather than dropping them.
+- **Unified Storage Caps & Deletion:** IndexedDB pruning and `localStorage` fallback both enforce `MAX_STORED_RUNS = 200`, support single-entry deletion (`deleteResearchRun`) and full clearing, and run a one-time legacy `localStorage` migration (`finpulse_history`).
+- **Cancellation Support:** `App.tsx` wires an `AbortController` to a **Cancel Research** button and propagates `AbortSignal` through `enforceClientRateLimit` and `fetch`.
+- **Testing & CI:** 45 Vitest unit tests across 7 files, `tsc --noEmit` lint checks (`supabase/`, `dist/`, `node_modules/` excluded in `tsconfig.json`), and Vite production builds pass under `.github/workflows/ci.yml` on Node 22.
 
-## Open questions & assumptions
+## Operational assumptions
 
-- Should the Gemini call be moved behind a server function? (Critical security decision pending user confirmation.)
-- Should Zod schemas replace the manual validation, aligning the required fields?
-- Should a cancel button be added to leverage the existing AbortSignal plumbing?
-- Should history caps be unified between IndexedDB and localStorage?
-- Assumption: the app is intended for single-user/local use given the client-side storage approach.
+- Local persistence assumes single-user browser storage (`finpulse_db` IndexedDB with `localStorage` fallback).
+- Live research queries require deploying `supabase/functions/gemini-research` with `GEMINI_API_KEY` configured via `supabase secrets set` and setting `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the Vite environment.
