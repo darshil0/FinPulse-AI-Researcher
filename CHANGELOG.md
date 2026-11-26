@@ -30,7 +30,7 @@ All notable changes to this project will be documented in this file.
 - **All-Invalid Row Status Classification**: Returned `partial_success` instead of `no_results` in `researchFinancialNews` when a CSV table parses with rows that all fail validation, and resolved `import.meta.env` dynamically per call.
 - **Name-Mapped Chart Colors**: Mapped `AnalyticsDashboard` sentiment (`Positive`, `Negative`, `Neutral`) and market impact (`High`, `Medium`, `Low`) pie slice colors by category name rather than array index.
 - **Status Filter Reset**: Reset `statusFilter` to `'all'` whenever a new research query starts in `src/App.tsx`.
-- **CI/CD Pipeline Reliability**: Synchronized `package-lock.json` with `package.json` so `npm ci` runs cleanly, updated `.github/workflows/ci.yml` from Node 20 to Node 22 (required by `vitest` 5 and `@supabase/supabase-js`), and added concurrency cancellation, job timeouts, and `workflow_dispatch` triggers.
+- **CI/CD Pipeline Reliability**: Synchronized `package-lock.json` with `package.json` so `npm ci` runs cleanly, updated `.github/workflows/ci.yml` from Node 20 to Node 22 (required by `vitest` 5 and `@supabase/supabase-js`), upgraded `actions/checkout` and `actions/setup-node` to `@v6` (native Node 24 action runtime), and added concurrency cancellation, job timeouts, and `workflow_dispatch` triggers.
 
 ## [1.4.0] - 2026-09-18
 
