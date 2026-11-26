@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-11-26
+
+### Security
+- **Server-Side Supabase Edge Function Proxy**: Moved Gemini API calls and `GEMINI_API_KEY` into `supabase/functions/gemini-research/index.ts` (Deno) with request validation (`query` length and `YYYY-MM-DD` date checks), calling `/functions/v1/gemini-research` from `src/services/geminiService.ts`.
+- **CSV Formula Injection Neutralization**: Added `sanitizeCell` in `src/lib/export/excel.ts` to prefix CSV cell values starting with `=`, `+`, `-`, or `@` with `'`, and restricted clickable source links in `NewsTable` to `http`-prefixed URLs.
+
+### Added
+- **In-Flight Request Cancellation**: Wired an `AbortController` and **Cancel Research** button in `src/App.tsx` passing `AbortSignal` through `researchFinancialNews`.
+- **Individual History Entry Deletion**: Added `deleteResearchRun` support in `src/lib/storage/db.ts` and per-entry delete actions in the History panel (`src/App.tsx`).
+- **Typed Error Codes & Date Validation**: Added `ResearchErrorCode` (`INVALID_DATE_RANGE`, `RATE_LIMITED`, `NETWORK_FAILURE`, `PROVIDER_ERROR`, `UNPARSEABLE_OUTPUT`, `INVALID_RESPONSE_STRUCTURE`, etc.) and Vite environment typings (`src/vite-env.d.ts`).
+
+### Changed
+- **Zod Schema Consolidation**: Updated `validateNewsItem` in `src/lib/validation/index.ts` to validate against `RawNewsItemSchema`, `DateSchema`, and `UrlSchema` with case-insensitive `Sentiment`/`Impact` normalization, required `Time` and `Sentiment_Explanation` fields, and `MISSING_SOURCE_URL` vs. `INVALID_URL_SCHEME` error codes.
+- **Unified Storage Cap**: Aligned IndexedDB pruning and `localStorage` fallback eviction under a shared `MAX_STORED_RUNS = 200` constant in `src/lib/storage/db.ts`.
+- **Export Object URL Cleanup**: Added `URL.revokeObjectURL(url)` cleanup in `exportToCSV` (`src/lib/export/excel.ts`).
+- **Proxy Test Coverage**: Updated `src/test/geminiService.test.ts` to test the Supabase proxy boundary, HTTP 429/401 handling, unparseable output, and `partial_success` classification.
+- **TypeScript Configuration**: Excluded `supabase`, `dist`, and `node_modules` from the browser `tsconfig.json` check so `npm run lint` (`tsc --noEmit`) validates client and test code cleanly.
+
+### Fixed
+- **All-Invalid Row Status Classification**: Returned `partial_success` instead of `no_results` in `researchFinancialNews` when a CSV table parses with rows that all fail validation, and resolved `import.meta.env` dynamically per call.
+- **Name-Mapped Chart Colors**: Mapped `AnalyticsDashboard` sentiment (`Positive`, `Negative`, `Neutral`) and market impact (`High`, `Medium`, `Low`) pie slice colors by category name rather than array index.
+- **Status Filter Reset**: Reset `statusFilter` to `'all'` whenever a new research query starts in `src/App.tsx`.
+
 ## [1.4.0] - 2026-09-18
 
 ### Added

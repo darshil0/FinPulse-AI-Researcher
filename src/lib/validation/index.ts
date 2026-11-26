@@ -95,6 +95,15 @@ const FIELD_TO_CODE: Partial<Record<keyof NewsItem, string>> = {
 
 function issueFromZodError(field: string, message: string, rawValue?: string): ValidationIssue {
   if (field === 'Source_URL') {
+    const trimmed = (rawValue ?? '').trim();
+    if (!trimmed || trimmed.toUpperCase() === 'N/A') {
+      return {
+        field,
+        code: 'MISSING_SOURCE_URL',
+        message: 'Source URL is missing or set to N/A',
+        rawValue,
+      };
+    }
     return {
       field,
       code: 'INVALID_URL_SCHEME',

@@ -8,8 +8,6 @@ import {
   ResearchErrorCode,
 } from "../lib/validation";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
 export const GEMINI_CONFIG = {
   MODEL_NAME: "gemini-3-flash-preview",
@@ -67,6 +65,8 @@ export async function researchFinancialNews(
   signal?: AbortSignal
 ): Promise<ResearchResult> {
   const timestamp = Date.now();
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
   if (!supabaseUrl || !supabaseAnonKey) {
     return errorResult(
@@ -194,11 +194,7 @@ export async function researchFinancialNews(
   const { items, summary } = validateResearchResults(parseResult.data, parseErrors);
 
   const status: ResearchRunStatus =
-    summary.verifiedRows === summary.totalRows
-      ? 'success'
-      : summary.verifiedRows > 0
-      ? 'partial_success'
-      : 'no_results';
+    summary.verifiedRows === summary.totalRows ? 'success' : 'partial_success';
 
   return {
     status,
