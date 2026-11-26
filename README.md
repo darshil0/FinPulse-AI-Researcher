@@ -31,7 +31,7 @@ FinPulse AI Researcher is an institutional-grade financial news research, valida
   - `NewsTable` offers column sorting across 6 fields, keyword/ticker filtering, verification status tabs (`All Rows`, `Verified Only`, `Needs Review`), expandable row diagnostics (`Sentiment_Explanation` and validation errors), and safe external source links (`http`-prefixed URLs).
   - `AnalyticsDashboard` renders Recharts Sentiment Breakdown and Market Impact pie charts (colors mapped by label name) alongside a Top Categories bar chart.
 - **End-to-End Traceability Audit Chain**: `TraceabilityPanel` exposes query parameters, model metadata, grounding search sources, validation metrics, persisted run state, row-level raw JSON payloads, raw LLM text, and clipboard copy tools.
-- **IndexedDB Persistence with Fallback**: Stores up to `200` research runs (`MAX_STORED_RUNS`) in IndexedDB (`finpulse_db`) via `idb` with automatic `localStorage` fallback, one-time legacy history migration, single-entry deletion, and full history clearing.
+- **IndexedDB Persistence with Fallback**: Stores up to `200` research runs (`MAX_STORED_RUNS`) in IndexedDB (`finpulse_db`) via `idb` with automatic `localStorage` fallback, one-time legacy history migration (`finpulse_history`), single-entry deletion, and full history clearing.
 - **Formula-Safe CSV & Native XLSX Exports**: Neutralizes spreadsheet formula injection via a shared `sanitizeCell` helper across both CSV and multi-sheet `.xlsx` exports.
 
 ---
@@ -62,10 +62,10 @@ FinPulse AI Researcher is an institutional-grade financial news research, valida
 
 The client bundle **never** embeds or accesses `GEMINI_API_KEY` (`vite.config.ts` does not inject the key via `define` or `VITE_*` variables). All AI calls cross a strict server-side boundary:
 
-1. **Client (`src/services/geminiService.ts`)**: Applies client-side rate limiting (`enforceClientRateLimit`, enforcing a `2,000 ms` minimum delay between consecutive requests and a 10-requests-per-60s burst cap) before sending `POST ${VITE_SUPABASE_URL}/functions/v1/gemini-research` with `{ query, startDate, endDate }`, `Authorization: Bearer ${VITE_SUPABASE_ANON_KEY}`, and an `AbortSignal`.
+1. **Client (`src/services/geminiService.ts`)**: Reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` dynamically (returning `PROVIDER_ERROR` if unset) and applies client-side rate limiting (`enforceClientRateLimit`, enforcing a `2,000 ms` minimum delay between consecutive requests and a `10`-requests-per-`60s` sliding-window cap that yields `RATE_LIMITED` if exceeded) before sending `POST ${VITE_SUPABASE_URL}/functions/v1/gemini-research` with `{ query, startDate, endDate }`, `Authorization: Bearer ${VITE_SUPABASE_ANON_KEY}`, and an `AbortSignal`.
 2. **Backend (`supabase/functions/gemini-research/index.ts`)**: Validates the request (`query` <= 2,000 characters, `startDate`/`endDate` matching `YYYY-MM-DD`) and reads `GEMINI_API_KEY` solely from server secrets (`Deno.env.get("GEMINI_API_KEY")`).
 3. **Gemini API & Retries**: Calls `gemini-3-flash-preview` with `x-goog-api-key` and `googleSearch` grounding, making up to `3` total attempts (`MAX_RETRIES = 3`) on `429` and `5xx` responses with exponential backoff (`1s`, `2s`, capped at `10s`) before returning `{ rawText, groundingSources, modelName }`.
-4. **Client Parsing & Run Status**: Strips markdown fences if present, parses the CSV payload with PapaParse, validates rows with Zod, and classifies the run into `success`, `partial_success`, `no_results`, `unparseable_model_output`, or `network_error`.
+4. **Client Parsing & Run Status**: Maps HTTP `429` to `RATE_LIMITED`, other HTTP/network errors to `NETWORK_FAILURE`, and malformed JSON to `INVALID_RESPONSE_STRUCTURE`; strips markdown fences if present, parses the CSV payload with PapaParse, validates rows with Zod, and classifies the run into `success`, `partial_success`, `no_results`, `unparseable_model_output`, or `network_error`.
 
 ---
 
@@ -115,9 +115,9 @@ interface ValidationIssue {
 
 interface ValidatedNewsItem {
   id: string;
-  raw: NewsItem;                                  // Unmodified parsed row
-  data: NewsItem;                                 // Normalized row (trimmed/cased enums)
-  verificationStatus: 'Verified' | 'Needs review'; // Displayed as "Needs Review" in filter tabs
+  raw: NewsItem;                                  // Original extracted strings (trimmed for Sentiment/Impact)
+  data: NewsItem;                                 // Output row with normalized Sentiment & Impact casing
+  verificationStatus: 'Verified' | 'Needs review'; // Displayed as "Needs Review" in UI filter tabs
   validationIssues: ValidationIssue[];
   isVerified: boolean;
 }
@@ -158,7 +158,7 @@ interface ValidationSummary {
     "isVerified": false
   }
   ```
-  - Highlighted in amber with an issue-count badge, expandable field-level diagnostics and raw payload view, selectable via the **Needs Review** filter, optionally excluded from Verified-only exports, and logged in the XLSX `Traceability` worksheet. When one or more parsed rows need review (even if all rows fail), the run status becomes `partial_success`.
+  - Highlighted in amber with an issue-count badge, expandable field-level diagnostics and raw payload view, selectable via the **Needs Review** filter, programmatically filterable via `includeNeedsReview = false` in export helpers, and logged in the XLSX `Traceability` worksheet. When one or more parsed rows need review (even if all rows fail), the run status becomes `partial_success`.
 
 ### Rationale Behind the Validation Logic
 
@@ -194,7 +194,7 @@ interface ValidationSummary {
 ## Project Structure
 
 ```text
-├── .github/workflows/ci.yml              # GitHub Actions CI (lint, test, build)
+├── .github/workflows/ci.yml              # GitHub Actions CI (lint, test, build on Node 22)
 ├── supabase/
 │   ├── config.toml                       # Edge Function config (verify_jwt = false)
 │   └── functions/gemini-research/
@@ -207,14 +207,22 @@ interface ValidationSummary {
 │   ├── lib/
 │   │   ├── export/excel.ts               # Shared sanitizeCell, CSV & XLSX exporters
 │   │   ├── storage/db.ts                 # IndexedDB persistence + localStorage fallback
+│   │   ├── utils.ts                      # Tailwind class-merge utility (cn)
 │   │   └── validation/                   # Zod schemas, validation logic & edge-case tests (12)
 │   ├── services/geminiService.ts         # Rate-limited Edge Function client & CSV parser
 │   ├── test/                             # Vitest suites (components, db, export, geminiService, validation)
 │   ├── tests/export.test.ts              # Formula-injection sanitizer tests (=HYPERLINK, +, -, @)
 │   ├── App.tsx                           # Main application UI & state orchestration
+│   ├── index.css                         # Tailwind CSS entrypoint & base styling
+│   ├── main.tsx                          # React root mount
 │   ├── types.ts                          # Shared NewsItem & SortConfig types
 │   └── vite-env.d.ts                     # Vite client environment typings
 ├── .env.example                          # Template for client & server environment variables
+├── CHANGELOG.md                          # Release notes and version history
+├── index.html                            # HTML entry point & OpenGraph/Twitter metadata
+├── LICENSE                               # Apache-2.0 license text
+├── metadata.json                         # Applet manifest and server-side Gemini capability
+├── package.json                          # Dependencies and npm scripts
 ├── tsconfig.json                         # TypeScript config (excludes supabase/, dist/, node_modules/)
 ├── vite.config.ts                        # Vite dev/build configuration
 └── vitest.config.ts                      # Vitest + jsdom test configuration
@@ -240,7 +248,7 @@ The application strictly separates public Vite client settings from the server-o
 | `VITE_SUPABASE_URL` | Client (Vite) | `.env` / hosting build env | **Required.** Base URL of your Supabase project (`https://<project-ref>.supabase.co`), used to call `/functions/v1/gemini-research`. |
 | `VITE_SUPABASE_ANON_KEY` | Client (Vite) | `.env` / hosting build env | **Required.** Public Supabase anonymous key sent in the `Authorization: Bearer` header. |
 
-Example local `.env` (client-only values):
+Example local `.env` (client-only values copied from `.env.example` — omit `GEMINI_API_KEY` from client builds):
 
 ```env
 VITE_SUPABASE_URL="https://your-project-ref.supabase.co"
@@ -249,17 +257,21 @@ VITE_SUPABASE_ANON_KEY="your-supabase-anon-key"
 
 ### Backend Endpoint Deployment (Required)
 
-Because the browser never calls Google Gemini directly, **you must deploy the `gemini-research` Edge Function and set `GEMINI_API_KEY` before running research queries** (otherwise queries fail with `PROVIDER_ERROR` or a network error):
+Because the browser never calls Google Gemini directly, **you must deploy the `gemini-research` Edge Function and configure `GEMINI_API_KEY` before running research queries** (otherwise queries fail with `PROVIDER_ERROR` when client `VITE_SUPABASE_*` variables are missing, or `NETWORK_FAILURE` when the Edge Function or server `GEMINI_API_KEY` secret is missing):
 
-1. **Set the server-side Gemini secret**:
+1. **Link your Supabase project** (or configure via the Supabase Dashboard):
+   ```bash
+   supabase link --project-ref your-project-ref
+   ```
+2. **Set the server-side Gemini secret**:
    ```bash
    supabase secrets set GEMINI_API_KEY="your-gemini-api-key"
    ```
-2. **Deploy the backend Edge Function** (`supabase/config.toml` sets `verify_jwt = false` so requests authenticated with the public anon key are accepted, and CORS headers allow browser preflight `OPTIONS` / `POST` requests):
+3. **Deploy the backend Edge Function** (`supabase/config.toml` sets `verify_jwt = false` so requests authenticated with the public anon key are accepted, and CORS headers allow browser preflight `OPTIONS` / `POST` requests):
    ```bash
    supabase functions deploy gemini-research
    ```
-3. **Configure your client `.env` file** with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+4. **Configure your client `.env` file** (`cp .env.example .env`) with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
 
 ### Local Development Commands
 
@@ -290,7 +302,7 @@ npm run clean
 
 ## Continuous Integration
 
-The workflow in `.github/workflows/ci.yml` runs on pushes and pull requests to `main` and `master`, executing:
+The workflow in `.github/workflows/ci.yml` runs on `ubuntu-latest` with **Node.js 22** (and supports manual `workflow_dispatch`, job timeouts, and concurrency cancellation) on pushes and pull requests to `main` and `master`, executing:
 
 1. `npm ci`
 2. `npm run lint` (`tsc --noEmit`)
@@ -301,4 +313,4 @@ The workflow in `.github/workflows/ci.yml` runs on pushes and pull requests to `
 
 ## License
 
-This project is licensed under the Apache-2.0 License.
+This project is licensed under the [Apache-2.0 License](./LICENSE).
