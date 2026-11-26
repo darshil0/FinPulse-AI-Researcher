@@ -207,4 +207,40 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
       parseErrors: ['Minor parse warning'],
     });
   });
+
+  it('handles an empty object and null values without throwing, flagging all missing fields', () => {
+    const emptyResult = validateNewsItem({}, 4);
+    expect(emptyResult.id.startsWith('row-4-')).toBe(true);
+    expect(emptyResult.isVerified).toBe(false);
+    expect(emptyResult.verificationStatus).toBe('Needs review');
+    expect(emptyResult.validationIssues.length).toBe(12);
+    expect(emptyResult.validationIssues.some((i) => i.field === 'Time')).toBe(true);
+    expect(
+      emptyResult.validationIssues.some((i) => i.field === 'Sentiment_Explanation')
+    ).toBe(true);
+
+    const nullResult = validateNewsItem(
+      { ...validRow, Time: null, Sentiment_Explanation: null },
+      5
+    );
+    expect(nullResult.isVerified).toBe(false);
+    expect(nullResult.verificationStatus).toBe('Needs review');
+    expect(nullResult.validationIssues.map((i) => i.field)).toEqual(
+      expect.arrayContaining(['Time', 'Sentiment_Explanation'])
+    );
+  });
+
+  it('preserves unmodified raw enum values while storing normalized values in data', () => {
+    const result = validateNewsItem(
+      { ...validRow, Sentiment: 'positive', Impact: 'LOW' },
+      2
+    );
+
+    expect(result.isVerified).toBe(true);
+    expect(result.raw.Sentiment).toBe('positive');
+    expect(result.raw.Impact).toBe('LOW');
+    expect(result.data.Sentiment).toBe('Positive');
+    expect(result.data.Impact).toBe('Low');
+  });
 });
+

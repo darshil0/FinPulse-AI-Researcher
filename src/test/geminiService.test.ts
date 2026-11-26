@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   researchFinancialNews,
+  enforceClientRateLimit,
   resetThrottleState,
   THROTTLE_CONFIG,
 } from '../services/geminiService';
@@ -126,7 +127,8 @@ describe('Gemini Research Service (proxy)', () => {
     expect(result.items[0].isVerified).toBe(false);
   });
 
-  it('spaces rapid-fire requests by at least MIN_INTERVAL_MS', async () => {
+  it('spaces rapid-fire requests by at least MIN_INTERVAL_MS (2 seconds)', async () => {
+    expect(THROTTLE_CONFIG.MIN_INTERVAL_MS).toBe(2000);
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
 
@@ -146,14 +148,34 @@ describe('Gemini Research Service (proxy)', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
     const p2 = researchFinancialNews('query 2');
-    // Immediately after dispatch, the second call is throttled before hitting fetch
-    await Promise.resolve();
-    await Promise.resolve();
+    // Immediately after dispatch and after 1.5s, the second call is still rate-limited
+    await vi.advanceTimersByTimeAsync(1500);
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(THROTTLE_CONFIG.MIN_INTERVAL_MS);
+    // Once the full 2-second interval elapses, the second call proceeds
+    await vi.advanceTimersByTimeAsync(500);
     await p2;
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('enforceClientRateLimit delays consecutive calls directly by 2 seconds', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+    expect(await enforceClientRateLimit()).toBe('ok');
+
+    let secondResolved = false;
+    const secondPromise = enforceClientRateLimit().then((res) => {
+      secondResolved = true;
+      return res;
+    });
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(secondResolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await secondPromise).toBe('ok');
+    expect(secondResolved).toBe(true);
   });
 
   it('aborts a queued throttled request without calling fetch', async () => {

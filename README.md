@@ -28,7 +28,7 @@ FinPulse AI Researcher is an institutional-grade financial news research, valida
 - **Live & Historical Date-Range Queries**: Supports real-time queries (defaulting to the last 24 hours) as well as historical `startDate`/`endDate` ranges (`YYYY-MM-DD`), with client-side `INVALID_DATE_RANGE` checks and a **Cancel Research** button powered by `AbortController`.
 - **Strict Runtime Zod Validation**: Validates all 12 CSV fields using `RawNewsItemSchema`, `DateSchema`, `UrlSchema`, `SENTIMENT_ENUM`, and `IMPACT_ENUM`, preserving invalid rows for auditability rather than silently dropping them.
 - **Interactive Data Grid & Visual Analytics**:
-  - `NewsTable` offers multi-column sorting, keyword/ticker filtering, verification status tabs (`All Rows`, `Verified Only`, `Needs Review`), expandable row diagnostics (`Sentiment_Explanation` and validation errors), and safe external source links.
+  - `NewsTable` offers column sorting across 6 fields, keyword/ticker filtering, verification status tabs (`All Rows`, `Verified Only`, `Needs Review`), expandable row diagnostics (`Sentiment_Explanation` and validation errors), and safe external source links (`http`-prefixed URLs).
   - `AnalyticsDashboard` renders Recharts Sentiment Breakdown and Market Impact pie charts (colors mapped by label name) alongside a Top Categories bar chart.
 - **End-to-End Traceability Audit Chain**: `TraceabilityPanel` exposes query parameters, model metadata, grounding search sources, validation metrics, persisted run state, row-level raw JSON payloads, raw LLM text, and clipboard copy tools.
 - **IndexedDB Persistence with Fallback**: Stores up to `200` research runs (`MAX_STORED_RUNS`) in IndexedDB (`finpulse_db`) via `idb` with automatic `localStorage` fallback, one-time legacy history migration, single-entry deletion, and full history clearing.
@@ -62,9 +62,9 @@ FinPulse AI Researcher is an institutional-grade financial news research, valida
 
 The client bundle **never** embeds or accesses `GEMINI_API_KEY` (`vite.config.ts` does not inject the key via `define` or `VITE_*` variables). All AI calls cross a strict server-side boundary:
 
-1. **Client (`src/services/geminiService.ts`)**: Applies client-side request throttling (`1,000 ms` minimum spacing and a 10-requests-per-60s burst cap) before sending `POST ${VITE_SUPABASE_URL}/functions/v1/gemini-research` with `{ query, startDate, endDate }`, `Authorization: Bearer ${VITE_SUPABASE_ANON_KEY}`, and an `AbortSignal`.
+1. **Client (`src/services/geminiService.ts`)**: Applies client-side rate limiting (`enforceClientRateLimit`, enforcing a `2,000 ms` minimum delay between consecutive requests and a 10-requests-per-60s burst cap) before sending `POST ${VITE_SUPABASE_URL}/functions/v1/gemini-research` with `{ query, startDate, endDate }`, `Authorization: Bearer ${VITE_SUPABASE_ANON_KEY}`, and an `AbortSignal`.
 2. **Backend (`supabase/functions/gemini-research/index.ts`)**: Validates the request (`query` <= 2,000 characters, `startDate`/`endDate` matching `YYYY-MM-DD`) and reads `GEMINI_API_KEY` solely from server secrets (`Deno.env.get("GEMINI_API_KEY")`).
-3. **Gemini API & Retries**: Calls `gemini-3-flash-preview` with `x-goog-api-key` and `googleSearch` grounding, retrying `429` and `5xx` responses up to `3` times with exponential backoff (`1s` to `10s`) before returning `{ rawText, groundingSources, modelName }`.
+3. **Gemini API & Retries**: Calls `gemini-3-flash-preview` with `x-goog-api-key` and `googleSearch` grounding, making up to `3` total attempts (`MAX_RETRIES = 3`) on `429` and `5xx` responses with exponential backoff (`1s`, `2s`, capped at `10s`) before returning `{ rawText, groundingSources, modelName }`.
 4. **Client Parsing & Run Status**: Strips markdown fences if present, parses the CSV payload with PapaParse, validates rows with Zod, and classifies the run into `success`, `partial_success`, `no_results`, `unparseable_model_output`, or `network_error`.
 
 ---
@@ -120,6 +120,14 @@ interface ValidatedNewsItem {
   verificationStatus: 'Verified' | 'Needs review'; // Displayed as "Needs Review" in filter tabs
   validationIssues: ValidationIssue[];
   isVerified: boolean;
+}
+
+interface ValidationSummary {
+  totalRows: number;
+  verifiedRows: number;
+  needsReviewRows: number;
+  hasParseErrors: boolean;
+  parseErrors: string[];
 }
 ```
 
@@ -179,7 +187,7 @@ interface ValidatedNewsItem {
 - **Backend Proxy & AI**: Supabase Edge Functions (`Deno.serve`), Gemini API (`gemini-3-flash-preview` with `googleSearch` grounding)
 - **Parsing & Validation**: PapaParse, Zod v4
 - **Storage & Export**: `idb` (IndexedDB + `localStorage` fallback), SheetJS (`xlsx`)
-- **Testing & Quality**: Vitest, React Testing Library, `fake-indexeddb`, jsdom
+- **Testing & Quality**: Vitest 5, React Testing Library, `fake-indexeddb`, jsdom
 
 ---
 
@@ -199,13 +207,15 @@ interface ValidatedNewsItem {
 │   ├── lib/
 │   │   ├── export/excel.ts               # Shared sanitizeCell, CSV & XLSX exporters
 │   │   ├── storage/db.ts                 # IndexedDB persistence + localStorage fallback
-│   │   └── validation/                   # Zod schemas, validation logic & unit tests
-│   ├── services/geminiService.ts         # Throttled Edge Function client & CSV parser
-│   ├── test/ & src/tests/                # Vitest suites (41 tests across 7 files)
+│   │   └── validation/                   # Zod schemas, validation logic & edge-case tests (12)
+│   ├── services/geminiService.ts         # Rate-limited Edge Function client & CSV parser
+│   ├── test/                             # Vitest suites (components, db, export, geminiService, validation)
+│   ├── tests/export.test.ts              # Formula-injection sanitizer tests (=HYPERLINK, +, -, @)
 │   ├── App.tsx                           # Main application UI & state orchestration
 │   ├── types.ts                          # Shared NewsItem & SortConfig types
 │   └── vite-env.d.ts                     # Vite client environment typings
-├── tsconfig.json                         # TypeScript config (excludes supabase/, dist/)
+├── .env.example                          # Template for client & server environment variables
+├── tsconfig.json                         # TypeScript config (excludes supabase/, dist/, node_modules/)
 ├── vite.config.ts                        # Vite dev/build configuration
 └── vitest.config.ts                      # Vitest + jsdom test configuration
 ```
@@ -222,23 +232,30 @@ interface ValidatedNewsItem {
 
 ### Environment Variables
 
-The application separates public Vite client settings from the server-only Gemini API secret:
+The application strictly separates public Vite client settings from the server-only Gemini API secret. Never prefix `GEMINI_API_KEY` with `VITE_`, as doing so would bundle it into browser assets:
 
 | Variable | Scope | Where to Set | Description |
 | :--- | :--- | :--- | :--- |
-| `GEMINI_API_KEY` | **Server-only** (never bundled into client) | Supabase Edge Function secret | **Required.** Google Gemini API key read strictly on the server by `supabase/functions/gemini-research/index.ts`. |
+| `GEMINI_API_KEY` | **Server-only** (never bundled into client) | Supabase Edge Function secret | **Required.** Google Gemini API key read strictly on the server by `supabase/functions/gemini-research/index.ts` via `Deno.env.get("GEMINI_API_KEY")`. |
 | `VITE_SUPABASE_URL` | Client (Vite) | `.env` / hosting build env | **Required.** Base URL of your Supabase project (`https://<project-ref>.supabase.co`), used to call `/functions/v1/gemini-research`. |
 | `VITE_SUPABASE_ANON_KEY` | Client (Vite) | `.env` / hosting build env | **Required.** Public Supabase anonymous key sent in the `Authorization: Bearer` header. |
 
+Example local `.env` (client-only values):
+
+```env
+VITE_SUPABASE_URL="https://your-project-ref.supabase.co"
+VITE_SUPABASE_ANON_KEY="your-supabase-anon-key"
+```
+
 ### Backend Endpoint Deployment (Required)
 
-Because the browser never calls Google Gemini directly, **you must deploy the `gemini-research` Edge Function and set `GEMINI_API_KEY` before running research queries** (otherwise queries will fail with a configuration or network error):
+Because the browser never calls Google Gemini directly, **you must deploy the `gemini-research` Edge Function and set `GEMINI_API_KEY` before running research queries** (otherwise queries fail with `PROVIDER_ERROR` or a network error):
 
 1. **Set the server-side Gemini secret**:
    ```bash
    supabase secrets set GEMINI_API_KEY="your-gemini-api-key"
    ```
-2. **Deploy the backend Edge Function** (`supabase/config.toml` configures `verify_jwt = false` for public anon-key requests):
+2. **Deploy the backend Edge Function** (`supabase/config.toml` sets `verify_jwt = false` so requests authenticated with the public anon key are accepted, and CORS headers allow browser preflight `OPTIONS` / `POST` requests):
    ```bash
    supabase functions deploy gemini-research
    ```
@@ -256,7 +273,7 @@ npm run dev
 # Run TypeScript type checking (tsc --noEmit)
 npm run lint
 
-# Run the Vitest unit test suite (41 tests across 7 suites)
+# Run the Vitest unit test suite (45 tests across 7 files)
 npm test
 
 # Build the production bundle into dist/
@@ -264,6 +281,9 @@ npm run build
 
 # Preview the production build locally
 npm run preview
+
+# Remove generated build artifacts (dist/)
+npm run clean
 ```
 
 ---

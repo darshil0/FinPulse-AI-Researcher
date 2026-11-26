@@ -14,7 +14,7 @@ export const GEMINI_CONFIG = {
 };
 
 export const THROTTLE_CONFIG = {
-  MIN_INTERVAL_MS: 1000,
+  MIN_INTERVAL_MS: 2000,
   WINDOW_MS: 60_000,
   MAX_REQUESTS_PER_WINDOW: 10,
 };
@@ -47,7 +47,11 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<boolean> {
   });
 }
 
-async function acquireThrottleSlot(
+/**
+ * Client-side rate limiter enforcing at least THROTTLE_CONFIG.MIN_INTERVAL_MS
+ * (2 seconds) between consecutive backend requests and capping bursts per minute.
+ */
+export async function enforceClientRateLimit(
   signal?: AbortSignal
 ): Promise<'ok' | 'aborted' | 'rate_limited'> {
   if (signal?.aborted) return 'aborted';
@@ -163,7 +167,7 @@ export async function researchFinancialNews(
     );
   }
 
-  const slot = await acquireThrottleSlot(signal);
+  const slot = await enforceClientRateLimit(signal);
   if (slot === 'aborted') {
     return errorResult('NETWORK_FAILURE', 'Request was cancelled by user.', timestamp);
   }
