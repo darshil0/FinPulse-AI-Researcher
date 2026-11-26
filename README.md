@@ -62,7 +62,7 @@ FinPulse AI Researcher is an institutional-grade financial news research, valida
 
 The client bundle **never** embeds or accesses `GEMINI_API_KEY` (`vite.config.ts` does not inject the key via `define` or `VITE_*` variables). All AI calls cross a strict server-side boundary:
 
-1. **Client (`src/services/geminiService.ts`)**: Sends `POST ${VITE_SUPABASE_URL}/functions/v1/gemini-research` with `{ query, startDate, endDate }`, `Authorization: Bearer ${VITE_SUPABASE_ANON_KEY}`, and an `AbortSignal`.
+1. **Client (`src/services/geminiService.ts`)**: Applies client-side request throttling (`1,000 ms` minimum spacing and a 10-requests-per-60s burst cap) before sending `POST ${VITE_SUPABASE_URL}/functions/v1/gemini-research` with `{ query, startDate, endDate }`, `Authorization: Bearer ${VITE_SUPABASE_ANON_KEY}`, and an `AbortSignal`.
 2. **Backend (`supabase/functions/gemini-research/index.ts`)**: Validates the request (`query` <= 2,000 characters, `startDate`/`endDate` matching `YYYY-MM-DD`) and reads `GEMINI_API_KEY` solely from server secrets (`Deno.env.get("GEMINI_API_KEY")`).
 3. **Gemini API & Retries**: Calls `gemini-3-flash-preview` with `x-goog-api-key` and `googleSearch` grounding, retrying `429` and `5xx` responses up to `3` times with exponential backoff (`1s` to `10s`) before returning `{ rawText, groundingSources, modelName }`.
 4. **Client Parsing & Run Status**: Strips markdown fences if present, parses the CSV payload with PapaParse, validates rows with Zod, and classifies the run into `success`, `partial_success`, `no_results`, `unparseable_model_output`, or `network_error`.
@@ -101,18 +101,64 @@ Before schema parsing, `validateNewsItem` extracts all 12 expected fields as str
 | `Impact` | `IMPACT_ENUM` (`High`, `Medium`, `Low`, case-insensitive normalization) | `INVALID_IMPACT` |
 | `Sentiment_Explanation` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
 
-### Logic Behind `'Verified'` vs `'Needs Review'` Status Labels
+### Structure of `Verified` vs `Needs Review` Items
 
-Rather than silently dropping malformed AI output, `validateResearchResults` retains every parsed row as a `ValidatedNewsItem` and assigns its status strictly from `issues.length === 0`:
+Every parsed row is wrapped in a `ValidatedNewsItem` record alongside a run-level `ValidationSummary`:
 
-1. **`Verified` (`isVerified: true`, `verificationStatus: 'Verified'`)**:
-   - Assigned **only** when `RawNewsItemSchema.safeParse` succeeds **and** no unexpected extra columns are present (`validationIssues.length === 0`).
-   - Badged green in `NewsTable` and `TraceabilityPanel`, selectable under **All Rows** and **Verified Only**, and counted toward `summary.verifiedRows`.
-   - When every parsed row in a run is `Verified`, the research run status is marked `success`.
-2. **`Needs Review` (`isVerified: false`, `verificationStatus: 'Needs review'`, labeled **Needs Review** in filter controls)**:
-   - Assigned whenever one or more schema checks fail (for example, missing `Time` or `Sentiment_Explanation`, an invalid date, missing/`javascript:` `Source_URL`, or out-of-enum `Sentiment`/`Impact`) or unexpected columns are detected.
-   - Deduplicates Zod errors per field via `issueFromZodError`, attaches structured diagnostics (`field`, `code`, `message`, `rawValue`) alongside the original `raw` row object, and highlights the row in amber so analysts can inspect or filter **Needs Review** items, exclude them from verified-only exports, and audit them in the XLSX `Traceability` sheet.
-   - When one or more parsed rows are `Needs review` (even if all rows fail), `researchFinancialNews` classifies the run as `partial_success`.
+```ts
+interface ValidationIssue {
+  field: string;      // Column name or 'Row' for extra columns
+  code: string;       // e.g., MISSING_REQUIRED_FIELD, MISSING_SOURCE_URL, INVALID_URL_SCHEME
+  message: string;    // Human-readable diagnostic
+  rawValue?: string;  // Exact value returned by the model
+}
+
+interface ValidatedNewsItem {
+  id: string;
+  raw: NewsItem;                                  // Unmodified parsed row
+  data: NewsItem;                                 // Normalized row (trimmed/cased enums)
+  verificationStatus: 'Verified' | 'Needs review'; // Displayed as "Needs Review" in filter tabs
+  validationIssues: ValidationIssue[];
+  isVerified: boolean;
+}
+```
+
+- **Structure of a `Verified` item** (`issues.length === 0`):
+  ```json
+  {
+    "id": "row-0-...",
+    "raw": { "Date": "2025-02-21", "Time": "14:05", "Sentiment": "positive", "...": "..." },
+    "data": { "Date": "2025-02-21", "Time": "14:05", "Sentiment": "Positive", "...": "..." },
+    "verificationStatus": "Verified",
+    "validationIssues": [],
+    "isVerified": true
+  }
+  ```
+  - Badged green in `NewsTable` and `TraceabilityPanel`, included in **All Rows** and **Verified Only**, and counted toward `summary.verifiedRows`. When every parsed row in a run is verified, the run status is `success`.
+
+- **Structure of a `Needs Review` item** (`issues.length > 0`):
+  ```json
+  {
+    "id": "row-1-...",
+    "raw": { "Date": "2025-02-21", "Time": "", "Source_URL": "N/A", "...": "..." },
+    "data": { "Date": "2025-02-21", "Time": "", "Source_URL": "N/A", "...": "..." },
+    "verificationStatus": "Needs review",
+    "validationIssues": [
+      { "field": "Time", "code": "MISSING_REQUIRED_FIELD", "message": "Time is required", "rawValue": "" },
+      { "field": "Source_URL", "code": "MISSING_SOURCE_URL", "message": "Source URL is missing or set to N/A", "rawValue": "N/A" }
+    ],
+    "isVerified": false
+  }
+  ```
+  - Highlighted in amber with an issue-count badge, expandable field-level diagnostics and raw payload view, selectable via the **Needs Review** filter, optionally excluded from Verified-only exports, and logged in the XLSX `Traceability` worksheet. When one or more parsed rows need review (even if all rows fail), the run status becomes `partial_success`.
+
+### Rationale Behind the Validation Logic
+
+- **Non-Destructive Quarantine Over Silent Dropping**: Financial research pipelines cannot silently discard malformed model outputs without distorting coverage or hiding hallucinations. Retaining non-compliant rows as `Needs review` preserves end-to-end provenance while keeping `Verified` datasets strictly clean.
+- **Mandatory Temporal & Reasoning Fields (`Time`, `Sentiment_Explanation`)**: Requiring both `Time` and `Sentiment_Explanation` guarantees that every `Verified` finding can be ordered intraday and audited for why its sentiment label was assigned.
+- **Strict Protocol & Missing-URL Separation (`UrlSchema`)**: Restricting `Source_URL` to `http:` and `https:` prevents unsafe schemes (`javascript:`, `data:`) from reaching clickable links in the UI, while separating `MISSING_SOURCE_URL` (`""`, `"N/A"`) from `INVALID_URL_SCHEME` gives analysts clear remediation signals.
+- **Normalized Enums Before Strict Parsing**: Case-insensitive normalization on `Sentiment` and `Impact` avoids false-negative rejections from minor LLM casing variations while still catching out-of-domain labels (`INVALID_SENTIMENT`, `INVALID_IMPACT`).
+- **Extra-Column Detection (`UNEXPECTED_COLUMNS`)**: Flagging unrequested columns detects CSV schema drift or unquoted-comma shifts from the model before data enters downstream charts or exports.
 
 ---
 
@@ -154,8 +200,8 @@ Rather than silently dropping malformed AI output, `validateResearchResults` ret
 │   │   ├── export/excel.ts               # Shared sanitizeCell, CSV & XLSX exporters
 │   │   ├── storage/db.ts                 # IndexedDB persistence + localStorage fallback
 │   │   └── validation/                   # Zod schemas, validation logic & unit tests
-│   ├── services/geminiService.ts         # Edge Function client, AbortSignal & CSV parser
-│   ├── test/ & src/tests/                # Vitest suites (38 tests across 7 files)
+│   ├── services/geminiService.ts         # Throttled Edge Function client & CSV parser
+│   ├── test/ & src/tests/                # Vitest suites (41 tests across 7 files)
 │   ├── App.tsx                           # Main application UI & state orchestration
 │   ├── types.ts                          # Shared NewsItem & SortConfig types
 │   └── vite-env.d.ts                     # Vite client environment typings
@@ -210,7 +256,7 @@ npm run dev
 # Run TypeScript type checking (tsc --noEmit)
 npm run lint
 
-# Run the Vitest unit test suite (38 tests across 7 suites)
+# Run the Vitest unit test suite (41 tests across 7 suites)
 npm test
 
 # Build the production bundle into dist/
