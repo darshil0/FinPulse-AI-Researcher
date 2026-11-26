@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 - **Server-Side Supabase Edge Function Proxy**: Moved Gemini API calls and `GEMINI_API_KEY` into `supabase/functions/gemini-research/index.ts` (Deno) with request validation (`query` length and `YYYY-MM-DD` date checks), calling `/functions/v1/gemini-research` from `src/services/geminiService.ts`.
-- **CSV Formula Injection Neutralization**: Added `sanitizeCell` in `src/lib/export/excel.ts` to prefix CSV cell values starting with `=`, `+`, `-`, or `@` with `'`, and restricted clickable source links in `NewsTable` to `http`-prefixed URLs.
+- **CSV & XLSX Formula Injection Neutralization**: Exported and applied a shared `sanitizeCell` helper in `src/lib/export/excel.ts` to prefix cell values starting with `=`, `+`, `-`, `@`, `\t` (tab), or `\r` (carriage return) with `'` across both CSV exports and XLSX worksheets (`Research Results` and `Traceability`), and restricted clickable source links in `NewsTable` to `http`-prefixed URLs.
 
 ### Added
 - **In-Flight Request Cancellation**: Wired an `AbortController` and **Cancel Research** button in `src/App.tsx` passing `AbortSignal` through `researchFinancialNews`.
@@ -17,7 +17,8 @@ All notable changes to this project will be documented in this file.
 - **Zod Schema Consolidation**: Updated `validateNewsItem` in `src/lib/validation/index.ts` to validate against `RawNewsItemSchema`, `DateSchema`, and `UrlSchema` with case-insensitive `Sentiment`/`Impact` normalization, required `Time` and `Sentiment_Explanation` fields, and `MISSING_SOURCE_URL` vs. `INVALID_URL_SCHEME` error codes.
 - **Unified Storage Cap**: Aligned IndexedDB pruning and `localStorage` fallback eviction under a shared `MAX_STORED_RUNS = 200` constant in `src/lib/storage/db.ts`.
 - **Export Object URL Cleanup**: Added `URL.revokeObjectURL(url)` cleanup in `exportToCSV` (`src/lib/export/excel.ts`).
-- **Proxy Test Coverage**: Updated `src/test/geminiService.test.ts` to test the Supabase proxy boundary, HTTP 429/401 handling, unparseable output, and `partial_success` classification.
+- **Proxy & Export Test Coverage**: Updated `src/test/geminiService.test.ts` and `src/test/export.test.ts` (24 tests total across 5 Vitest suites) to cover the Supabase proxy boundary, HTTP 429/401 handling, unparseable output, `partial_success` classification, formula-injection neutralization in CSV/XLSX outputs, and `URL.revokeObjectURL` cleanup.
+- **Documentation Rewrite**: Rewrote `README.md` with dedicated sections for the server-side Gemini API proxy architecture, required `GEMINI_API_KEY` / Supabase Edge Function deployment, Data Integrity Zod schemas, and `Verified` vs. `Needs review` status behavior.
 - **TypeScript Configuration**: Excluded `supabase`, `dist`, and `node_modules` from the browser `tsconfig.json` check so `npm run lint` (`tsc --noEmit`) validates client and test code cleanly.
 
 ### Fixed
