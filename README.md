@@ -214,7 +214,9 @@ See [SECURITY.md](./SECURITY.md) for the complete security architecture, `xlsx@0
 ## Project Structure
 
 ```text
-├── .github/workflows/ci.yml              # GitHub Actions CI (audit, lint, test, build on Node 22)
+├── .github/workflows/
+│   ├── audit.yml                         # On-push security audit (npm audit) & tsc --strict gate
+│   └── ci.yml                            # GitHub Actions CI (audit, lint, test, build on Node 22)
 ├── supabase/
 │   ├── config.toml                       # Edge Function config (verify_jwt = false)
 │   └── functions/gemini-research/
@@ -333,6 +335,8 @@ The workflow in `.github/workflows/ci.yml` runs on `ubuntu-latest` with **Node.j
 3. `npm run lint` (`tsc --noEmit`)
 4. `npm test` (`vitest run`)
 5. `npm run build` (`vite build`)
+
+In addition, `.github/workflows/audit.yml` runs on every `push` event (plus `workflow_dispatch`) to enforce `npm audit --audit-level=critical` and `npx tsc --strict --noEmit` across all pushed branches.
 
 ---
 

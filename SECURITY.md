@@ -18,7 +18,7 @@ FinPulse AI Researcher isolates all Gemini API credentials behind a server-side 
 
 ## Dependency & Supply-Chain Posture
 
-- **Critical Vulnerability Gate**: GitHub Actions CI runs `npm audit --audit-level=critical` on every push and pull request.
+- **Critical Vulnerability & Type-Safety Gates**: GitHub Actions `.github/workflows/ci.yml` runs `npm audit --audit-level=critical` on pushes and pull requests to `main`/`master`, and `.github/workflows/audit.yml` runs `npm audit --audit-level=critical` and `npx tsc --strict --noEmit` on every push.
 - **`xlsx@0.18.5` (SheetJS) Advisory Note**: `xlsx` carries known high-severity prototype pollution and ReDoS advisories in its parser paths, with no newer patched release published on the public npm registry. In FinPulse AI Researcher, `xlsx` is invoked strictly in **write-only** mode (`XLSX.utils.book_new`, `XLSX.utils.json_to_sheet`, `XLSX.writeFile`) to export sanitized client-side research tables and never parses untrusted external `.xlsx` files.
 
 ## Recommended Deployment Hardening

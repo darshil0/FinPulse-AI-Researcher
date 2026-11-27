@@ -36,7 +36,7 @@ All notable changes to this project will be documented in this file.
 - **Semantic & Chronological Sorting**: Sorted `Impact` by severity (`High > Medium > Low`) and `Date` chronologically alongside `Time` in `src/App.tsx`.
 - **Invalid Date & Error History Handling**: Separated `INVALID_DATE_RANGE` into a non-retryable validation alert and skipped saving `network_error` runs into IndexedDB history.
 - **Name-Mapped Chart Colors**: Mapped `AnalyticsDashboard` sentiment (`Positive`, `Negative`, `Neutral`) and market impact (`High`, `Medium`, `Low`) pie slice colors by category name rather than array index.
-- **CI/CD Pipeline Reliability**: Synchronized `package-lock.json` with `package.json`, set `"engines": { "node": ">=22.0.0" }`, upgraded `.github/workflows/ci.yml` to Node 22 with `actions/checkout@v6` and `actions/setup-node@v6`, added `npm audit --audit-level=critical`, and configured concurrency cancellation and job timeouts.
+- **CI/CD Pipeline Reliability**: Synchronized `package-lock.json` with `package.json`, set `"engines": { "node": ">=22.0.0" }`, upgraded `.github/workflows/ci.yml` to Node 22 with `actions/checkout@v6` and `actions/setup-node@v6`, added `npm audit --audit-level=critical`, added `.github/workflows/audit.yml` to run `npm audit --audit-level=critical` and `npx tsc --strict --noEmit` on every push, and configured concurrency cancellation and job timeouts.
 
 ## [1.4.0] - 2026-09-18
 
