@@ -367,7 +367,10 @@ export default function App() {
     setFilterText('');
     setStatusFilter('all');
 
-    if (item.items && item.items.length > 0) {
+    if (
+      (item.items && item.items.length > 0) ||
+      item.status === 'unparseable_model_output'
+    ) {
       const restoredSnapshot: ImmutableResearchRun = Object.freeze({
         ...item,
         query: item.query,
