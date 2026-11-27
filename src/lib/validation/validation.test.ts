@@ -3,6 +3,7 @@ import {
   RawNewsItemSchema,
   extractGroundedDomains,
   extractSourceHostname,
+  isGrounded,
   isSourceUrlGrounded,
   validateDate,
   validateNewsItem,
@@ -399,6 +400,19 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
     });
     expect(afterEnd.valid).toBe(false);
     expect(afterEnd.issues.some((i) => i.code === 'DATE_OUT_OF_RANGE')).toBe(true);
+  });
+
+  it('verifies Source_URL hostname existence via isGrounded against GroundingSourceRef and domain strings', () => {
+    expect(
+      isGrounded('https://markets.ft.com/content/123', ['ft.com', 'https://www.wsj.com/news'])
+    ).toBe(true);
+    expect(
+      isGrounded('https://reuters.com/world', [{ title: 'Reuters', url: 'https://www.reuters.com/markets' }])
+    ).toBe(true);
+    expect(
+      isGrounded('https://untrusted-blog.com/post', ['ft.com', { title: 'WSJ', url: 'https://wsj.com' }])
+    ).toBe(false);
+    expect(isGrounded('https://www.ft.com/news', [])).toBe(false);
   });
 });
 

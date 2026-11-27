@@ -199,4 +199,44 @@ describe('App Orchestration, Provenance & Export Integration', () => {
       expect(screen.getByText('Frozen NVDA Query')).toBeDefined();
     });
   });
+
+  it('uses Schema-Valid instead of Verified across App UI when rows only meet syntactic requirements', async () => {
+    const schemaValidRow: ValidatedNewsItem = {
+      ...verifiedRow,
+      id: 'row-sv1',
+      verificationStatus: 'Schema-Valid',
+      isVerified: true,
+      isGrounded: false,
+    };
+
+    vi.spyOn(geminiService, 'researchFinancialNews').mockResolvedValue({
+      status: 'success',
+      rawResponse: 'csv',
+      groundingSources: [],
+      items: [schemaValidRow],
+      summary: {
+        totalRows: 1,
+        verifiedRows: 1,
+        needsReviewRows: 0,
+        hasParseErrors: false,
+        parseErrors: [],
+      },
+      modelName: 'gemini-3-flash-preview',
+      timestamp: Date.now(),
+    });
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Financial research query'), {
+      target: { value: 'Syntax Only Check' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Run Agent/i }));
+
+    await screen.findByText('Research Results');
+
+    expect(screen.getByText('1 Schema-Valid')).toBeDefined();
+    expect(screen.getByText('Interactive Schema-Valid Data Grid')).toBeDefined();
+    expect(screen.getByLabelText('Status: Schema-Valid')).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Schema-Valid Only \(1\)/i })).toBeDefined();
+    expect(screen.queryByLabelText('Status: Verified')).toBeNull();
+  });
 });

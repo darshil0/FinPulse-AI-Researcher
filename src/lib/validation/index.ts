@@ -269,12 +269,38 @@ export function extractSourceHostname(rawUrl: string): string | null {
  * excluding search redirect proxies).
  */
 export function extractGroundedDomains(
-  groundingSources: GroundingSourceRef[]
+  groundingSources: Array<GroundingSourceRef | string>
 ): string[] {
   const domains = new Set<string>();
   const domainInTitleRegex = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/gi;
 
+  const addHostFromCandidate = (candidate: string) => {
+    const trimmed = candidate.trim();
+    if (!trimmed) return;
+    const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    try {
+      const parsed = new URL(withScheme);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+        if (
+          host.includes('.') &&
+          !isPlaceholderHost(host) &&
+          !GROUNDING_REDIRECT_HOSTS.has(host)
+        ) {
+          domains.add(host);
+        }
+      }
+    } catch {
+      // Ignore malformed grounding URL/domain
+    }
+  };
+
   for (const src of groundingSources) {
+    if (typeof src === 'string') {
+      addHostFromCandidate(src);
+      continue;
+    }
+
     if (src.url) {
       try {
         const parsed = new URL(src.url.trim());
@@ -310,13 +336,13 @@ export function extractGroundedDomains(
 }
 
 /**
- * Compares the normalized hostname of `sourceUrl` against the grounded domain list
- * extracted from `groundingSources` (and publisher title tokens for redirect links)
+ * Verifies if the `Source_URL` hostname matches the domain list extracted
+ * from `groundingSources` (and publisher titles for grounding redirect links)
  * to ensure the link is a valid, grounded source.
  */
-export function isSourceUrlGrounded(
+export function isGrounded(
   sourceUrl: string,
-  groundingSources: GroundingSourceRef[]
+  groundingSources: Array<GroundingSourceRef | string>
 ): boolean {
   if (!groundingSources || groundingSources.length === 0) return false;
 
@@ -340,15 +366,25 @@ export function isSourceUrlGrounded(
   const brandRegex = new RegExp(`\\b${escapeRegExp(brandToken)}\\b`, 'i');
 
   return groundingSources.some(
-    (src) => typeof src.title === 'string' && brandRegex.test(src.title)
+    (src) =>
+      typeof src !== 'string' &&
+      typeof src.title === 'string' &&
+      brandRegex.test(src.title)
   );
+}
+
+export function isSourceUrlGrounded(
+  sourceUrl: string,
+  groundingSources: Array<GroundingSourceRef | string>
+): boolean {
+  return isGrounded(sourceUrl, groundingSources);
 }
 
 export function isUrlGrounded(
   url: string,
-  groundingSources: GroundingSourceRef[]
+  groundingSources: Array<GroundingSourceRef | string>
 ): boolean {
-  return isSourceUrlGrounded(url, groundingSources);
+  return isGrounded(url, groundingSources);
 }
 
 const UrlSchema = z
@@ -526,7 +562,7 @@ export function validateNewsItem(
   const groundedMatch =
     hasGroundingSources &&
     urlValidSyntax &&
-    isSourceUrlGrounded(item.Source_URL, context!.groundingSources!);
+    isGrounded(item.Source_URL, context!.groundingSources!);
 
   if (hasGroundingSources && urlValidSyntax && !groundedMatch) {
     issues.push({

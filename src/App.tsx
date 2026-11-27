@@ -468,7 +468,11 @@ export default function App() {
                             <span>{new Date(item.timestamp).toLocaleString()}</span>
                             <span aria-hidden="true">·</span>
                             <span className="font-mono text-slate-600">
-                              {item.summary?.verifiedRows ?? 0} verified
+                              {item.summary?.verifiedRows ?? 0}{' '}
+                              {!item.items?.some((r) => r.verificationStatus === 'Verified') &&
+                              item.items?.some((r) => r.verificationStatus === 'Schema-Valid')
+                                ? 'schema-valid'
+                                : 'verified'}
                             </span>
                           </div>
                         </button>
