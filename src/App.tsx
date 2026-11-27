@@ -769,10 +769,23 @@ export default function App() {
                 <div>
                   <div className="flex flex-wrap items-center gap-2.5">
                     <h3 className="text-lg font-bold text-slate-900">Research Results</h3>
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 tabular-nums">
-                      <ShieldCheck size={14} />
-                      {currentResult.summary.verifiedRows} Verified
-                    </span>
+                    {(() => {
+                      const schemaValidOnly =
+                        !currentResult.items.some((i) => i.verificationStatus === 'Verified') &&
+                        currentResult.items.some((i) => i.verificationStatus === 'Schema-Valid');
+                      return (
+                        <span
+                          className={cn(
+                            'inline-flex items-center gap-1 text-xs font-semibold tabular-nums',
+                            schemaValidOnly ? 'text-sky-700' : 'text-emerald-700'
+                          )}
+                        >
+                          <ShieldCheck size={14} />
+                          {currentResult.summary.verifiedRows}{' '}
+                          {schemaValidOnly ? 'Schema-Valid' : 'Verified'}
+                        </span>
+                      );
+                    })()}
                     {currentResult.summary.needsReviewRows > 0 && (
                       <>
                         <span aria-hidden="true" className="text-slate-300">
@@ -861,7 +874,10 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <Filter size={16} className="text-slate-400" />
                     <h4 className="text-sm font-bold text-slate-700">
-                      Interactive Verified Data Grid
+                      {!currentResult.items.some((i) => i.verificationStatus === 'Verified') &&
+                      currentResult.items.some((i) => i.verificationStatus === 'Schema-Valid')
+                        ? 'Interactive Schema-Valid Data Grid'
+                        : 'Interactive Verified Data Grid'}
                     </h4>
                   </div>
                   <div className="relative max-w-xs w-full">

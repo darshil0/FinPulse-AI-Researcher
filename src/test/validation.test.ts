@@ -17,11 +17,19 @@ describe('Schema Validation Module', () => {
     Sentiment_Explanation: 'Earnings beat drives stock higher.',
   };
 
-  it('marks a completely valid row as Verified', () => {
-    const validated = validateNewsItem(validRawRow, 0);
-    expect(validated.isVerified).toBe(true);
-    expect(validated.verificationStatus).toBe('Verified');
-    expect(validated.validationIssues).toHaveLength(0);
+  it('marks a valid row without grounding as Schema-Valid and a grounded row as Verified', () => {
+    const syntaxOnly = validateNewsItem(validRawRow, 0);
+    expect(syntaxOnly.isVerified).toBe(true);
+    expect(syntaxOnly.isGrounded).toBe(false);
+    expect(syntaxOnly.verificationStatus).toBe('Schema-Valid');
+    expect(syntaxOnly.validationIssues).toHaveLength(0);
+
+    const grounded = validateNewsItem(validRawRow, 0, {
+      groundingSources: [{ title: 'Reuters', url: 'https://reuters.com/markets' }],
+    });
+    expect(grounded.isVerified).toBe(true);
+    expect(grounded.isGrounded).toBe(true);
+    expect(grounded.verificationStatus).toBe('Verified');
   });
 
   it('marks row as Needs review when source URL is missing', () => {

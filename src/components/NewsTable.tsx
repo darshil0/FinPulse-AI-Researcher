@@ -33,27 +33,42 @@ function isSafeHttpUrl(url?: string): boolean {
 
 const VerificationBadge: React.FC<{
   isVerified: boolean;
+  verificationStatus?: ValidatedNewsItem['verificationStatus'];
   issuesCount: number;
-}> = ({ isVerified, issuesCount }) => {
-  if (isVerified) {
+}> = ({ isVerified, verificationStatus, issuesCount }) => {
+  if (!isVerified || verificationStatus === 'Needs review') {
     return (
       <span
-        aria-label="Status: Verified"
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap"
+        aria-label="Status: Needs Review"
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap tabular-nums"
       >
-        <ShieldCheck size={12} className="text-emerald-600" />
-        Verified
+        <AlertTriangle size={12} className="text-amber-600" />
+        Needs review ({issuesCount})
+      </span>
+    );
+  }
+
+  if (verificationStatus === 'Schema-Valid') {
+    return (
+      <span
+        aria-label="Status: Schema-Valid"
+        title="Passed schema, calendar, and range checks; source domain was not corroborated against grounding sources"
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200 whitespace-nowrap"
+      >
+        <ShieldCheck size={12} className="text-sky-600" />
+        Schema-Valid
       </span>
     );
   }
 
   return (
     <span
-      aria-label="Status: Needs Review"
-      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap tabular-nums"
+      aria-label="Status: Verified"
+      title="Passed schema, calendar, range, and grounding source domain verification"
+      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap"
     >
-      <AlertTriangle size={12} className="text-amber-600" />
-      Needs review ({issuesCount})
+      <ShieldCheck size={12} className="text-emerald-600" />
+      Verified
     </span>
   );
 };
@@ -247,6 +262,7 @@ const NewsRow: React.FC<{ item: ValidatedNewsItem; idx: number }> = ({ item, idx
         <td className="px-4 py-3.5 whitespace-nowrap">
           <VerificationBadge
             isVerified={item.isVerified}
+            verificationStatus={item.verificationStatus}
             issuesCount={item.validationIssues.length}
           />
         </td>
@@ -412,6 +428,9 @@ export const NewsTable: React.FC<NewsTableProps> = ({
 }) => {
   const verifiedCount = items.filter((i) => i.isVerified).length;
   const reviewCount = items.length - verifiedCount;
+  const hasGroundedItems = items.some((i) => i.verificationStatus === 'Verified');
+  const hasSchemaValidOnly =
+    !hasGroundedItems && items.some((i) => i.verificationStatus === 'Schema-Valid');
 
   const filteredByStatus = items.filter((item) => {
     if (statusFilter === 'verified') return item.isVerified;
@@ -447,12 +466,17 @@ export const NewsTable: React.FC<NewsTableProps> = ({
             className={cn(
               'px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap tabular-nums',
               statusFilter === 'verified'
-                ? 'bg-white text-emerald-700 shadow-sm'
+                ? hasSchemaValidOnly
+                  ? 'bg-white text-sky-700 shadow-sm'
+                  : 'bg-white text-emerald-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             )}
           >
-            <ShieldCheck size={12} className="text-emerald-600" />
-            Verified Only ({verifiedCount})
+            <ShieldCheck
+              size={12}
+              className={hasSchemaValidOnly ? 'text-sky-600' : 'text-emerald-600'}
+            />
+            {hasSchemaValidOnly ? `Schema-Valid Only (${verifiedCount})` : `Verified Only (${verifiedCount})`}
           </button>
           <button
             type="button"
@@ -472,7 +496,10 @@ export const NewsTable: React.FC<NewsTableProps> = ({
         </div>
 
         <div className="text-xs font-medium text-slate-500 px-2 tabular-nums">
-          {statusFilter === 'verified' && 'Showing strictly verified results only'}
+          {statusFilter === 'verified' &&
+            (hasSchemaValidOnly
+              ? 'Showing schema-valid results only'
+              : 'Showing strictly verified results only')}
           {statusFilter === 'review' && 'Showing rows flagged for review'}
           {statusFilter === 'all' && 'Showing all extracted rows'}
         </div>

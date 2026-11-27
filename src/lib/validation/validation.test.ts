@@ -21,11 +21,12 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
     Sentiment_Explanation: 'Stronger-than-expected revenue and guidance drove positive sentiment.',
   };
 
-  it('marks a valid row as Verified and complies with RawNewsItemSchema', () => {
+  it('marks a valid row without grounding sources as Schema-Valid and complies with RawNewsItemSchema', () => {
     const result = validateNewsItem(validRow, 0);
 
     expect(result.isVerified).toBe(true);
-    expect(result.verificationStatus).toBe('Verified');
+    expect(result.isGrounded).toBe(false);
+    expect(result.verificationStatus).toBe('Schema-Valid');
     expect(result.validationIssues).toHaveLength(0);
     expect(RawNewsItemSchema.safeParse(result.data).success).toBe(true);
   });
@@ -41,7 +42,7 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
     );
 
     expect(result.isVerified).toBe(true);
-    expect(result.verificationStatus).toBe('Verified');
+    expect(result.verificationStatus).toBe('Schema-Valid');
     expect(result.data.Sentiment).toBe('Negative');
     expect(result.data.Impact).toBe('Medium');
     expect(RawNewsItemSchema.safeParse(result.data).success).toBe(true);
@@ -298,6 +299,31 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
       ],
     });
     expect(groundedViaTitle.isVerified).toBe(true);
+    expect(groundedViaTitle.isGrounded).toBe(true);
+    expect(groundedViaTitle.verificationStatus).toBe('Verified');
+
+    // Multi-part ccTLD domain isolation: fakeblog.co.uk must not match bbc.co.uk
+    const unrelatedCcTld = validateNewsItem(
+      { ...validRow, Source_URL: 'https://fakeblog.co.uk/news' },
+      0,
+      {
+        groundingSources: [{ title: 'BBC News', url: 'https://www.bbc.co.uk/news/business' }],
+      }
+    );
+    expect(unrelatedCcTld.isVerified).toBe(false);
+    expect(unrelatedCcTld.isGrounded).toBe(false);
+    expect(unrelatedCcTld.validationIssues.some((i) => i.code === 'UNGROUNDED_SOURCE')).toBe(true);
+
+    const matchingSubdomainCcTld = validateNewsItem(
+      { ...validRow, Source_URL: 'https://feeds.bbc.co.uk/business/story' },
+      0,
+      {
+        groundingSources: [{ title: 'BBC News', url: 'https://www.bbc.co.uk/news/business' }],
+      }
+    );
+    expect(matchingSubdomainCcTld.isVerified).toBe(true);
+    expect(matchingSubdomainCcTld.isGrounded).toBe(true);
+    expect(matchingSubdomainCcTld.verificationStatus).toBe('Verified');
   });
 });
 

@@ -202,7 +202,21 @@ export const TraceabilityPanel: React.FC<TraceabilityPanelProps> = ({
             <ShieldCheck size={14} /> 3. Schema Validation
           </div>
           <div className="flex items-center gap-2 tabular-nums">
-            <span className="text-sm font-semibold text-emerald-400">{summary.verifiedRows} Verified</span>
+            <span
+              className={cn(
+                'text-sm font-semibold',
+                !items.some((i) => i.verificationStatus === 'Verified') &&
+                  items.some((i) => i.verificationStatus === 'Schema-Valid')
+                  ? 'text-sky-400'
+                  : 'text-emerald-400'
+              )}
+            >
+              {summary.verifiedRows}{' '}
+              {!items.some((i) => i.verificationStatus === 'Verified') &&
+              items.some((i) => i.verificationStatus === 'Schema-Valid')
+                ? 'Schema-Valid'
+                : 'Verified'}
+            </span>
             {summary.needsReviewRows > 0 && (
               <span className="text-sm font-semibold text-amber-400">
                 {summary.needsReviewRows} Review
@@ -299,13 +313,17 @@ export const TraceabilityPanel: React.FC<TraceabilityPanelProps> = ({
                     className="w-full p-2.5 flex items-center justify-between text-left hover:bg-slate-800/40 rounded-lg transition-colors"
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      {item.isVerified ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-950 text-emerald-400 rounded text-[10px] font-semibold border border-emerald-800 shrink-0">
-                          <ShieldCheck size={12} /> Verified
-                        </span>
-                      ) : (
+                      {!item.isVerified || item.verificationStatus === 'Needs review' ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-950 text-amber-400 rounded text-[10px] font-semibold border border-amber-800 shrink-0">
                           <AlertTriangle size={12} /> Needs review
+                        </span>
+                      ) : item.verificationStatus === 'Schema-Valid' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-sky-950 text-sky-400 rounded text-[10px] font-semibold border border-sky-800 shrink-0">
+                          <ShieldCheck size={12} /> Schema-Valid
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-950 text-emerald-400 rounded text-[10px] font-semibold border border-emerald-800 shrink-0">
+                          <ShieldCheck size={12} /> Verified
                         </span>
                       )}
                       <span className="font-semibold text-slate-200 shrink-0">

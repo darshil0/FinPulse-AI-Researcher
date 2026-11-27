@@ -49,6 +49,12 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ items })
   const [chartScope, setChartScope] = useState<'all' | 'verified'>('all');
 
   const verifiedItems = useMemo(() => items.filter((i) => i.isVerified), [items]);
+  const hasGroundedItems = useMemo(
+    () => items.some((i) => i.verificationStatus === 'Verified'),
+    [items]
+  );
+  const hasSchemaValidOnly =
+    !hasGroundedItems && items.some((i) => i.verificationStatus === 'Schema-Valid');
   const activeItems = chartScope === 'verified' ? verifiedItems : items;
   const newsData = useMemo(() => activeItems.map((i) => i.data), [activeItems]);
 
@@ -141,12 +147,19 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ items })
             className={cn(
               'px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 tabular-nums',
               chartScope === 'verified'
-                ? 'bg-white text-emerald-700 shadow-sm'
+                ? hasSchemaValidOnly
+                  ? 'bg-white text-sky-700 shadow-sm'
+                  : 'bg-white text-emerald-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             )}
           >
-            <ShieldCheck size={12} className="text-emerald-600" />
-            Verified Only ({verifiedItems.length})
+            <ShieldCheck
+              size={12}
+              className={hasSchemaValidOnly ? 'text-sky-600' : 'text-emerald-600'}
+            />
+            {hasSchemaValidOnly
+              ? `Schema-Valid Only (${verifiedItems.length})`
+              : `Verified Only (${verifiedItems.length})`}
           </button>
         </div>
       </div>

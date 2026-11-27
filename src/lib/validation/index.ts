@@ -26,13 +26,16 @@ export interface ValidationIssue {
   rawValue?: string;
 }
 
+export type VerificationStatus = 'Verified' | 'Schema-Valid' | 'Needs review';
+
 export interface ValidatedNewsItem {
   id: string;
   raw: Record<string, unknown>;
   data: NewsItem;
-  verificationStatus: 'Verified' | 'Needs review';
+  verificationStatus: VerificationStatus;
   validationIssues: ValidationIssue[];
   isVerified: boolean;
+  isGrounded?: boolean;
 }
 
 export interface ValidationSummary {
@@ -126,11 +129,42 @@ function getDefaultMaxAllowedDate(): string {
   return utcDate > localDate ? utcDate : localDate;
 }
 
+const MULTI_PART_PUBLIC_SUFFIXES = new Set([
+  'co.uk',
+  'org.uk',
+  'ac.uk',
+  'gov.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'co.jp',
+  'ne.jp',
+  'or.jp',
+  'com.cn',
+  'com.hk',
+  'com.sg',
+  'co.in',
+  'com.br',
+  'co.za',
+  'co.kr',
+  'com.mx',
+  'co.nz',
+  'com.tw',
+]);
+
 function getRegistrableDomain(hostname: string): string {
   const clean = hostname.toLowerCase().replace(/^www\./, '');
   const parts = clean.split('.');
   if (parts.length <= 2) return clean;
-  return parts.slice(-2).join('.');
+  const lastTwo = parts.slice(-2).join('.');
+  if (MULTI_PART_PUBLIC_SUFFIXES.has(lastTwo) && parts.length >= 3) {
+    return parts.slice(-3).join('.');
+  }
+  return lastTwo;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function isUrlGrounded(
@@ -143,6 +177,10 @@ export function isUrlGrounded(
     const cleanHost = parsed.hostname.toLowerCase().replace(/^www\./, '');
     const regDomain = getRegistrableDomain(cleanHost);
     const brandToken = regDomain.split('.')[0];
+    const brandRegex =
+      brandToken.length >= 3
+        ? new RegExp(`\\b${escapeRegExp(brandToken)}\\b`, 'i')
+        : null;
 
     return groundingSources.some((src) => {
       if (src.url) {
@@ -161,7 +199,7 @@ export function isUrlGrounded(
         if (
           titleLower.includes(cleanHost) ||
           titleLower.includes(regDomain) ||
-          (brandToken.length >= 3 && titleLower.includes(brandToken))
+          (brandRegex !== null && brandRegex.test(src.title))
         ) {
           return true;
         }
@@ -363,12 +401,16 @@ export function validateNewsItem(
   }
 
   // Grounding source corroboration check when Source_URL syntax passed
-  if (
-    context?.groundingSources &&
-    context.groundingSources.length > 0 &&
-    isValidHttpPublicUrl(item.Source_URL) &&
-    !isUrlGrounded(item.Source_URL, context.groundingSources)
-  ) {
+  const hasGroundingSources = Boolean(
+    context?.groundingSources && context.groundingSources.length > 0
+  );
+  const urlValidSyntax = isValidHttpPublicUrl(item.Source_URL);
+  const groundedMatch =
+    hasGroundingSources &&
+    urlValidSyntax &&
+    isUrlGrounded(item.Source_URL, context!.groundingSources!);
+
+  if (hasGroundingSources && urlValidSyntax && !groundedMatch) {
     issues.push({
       field: 'Source_URL',
       code: 'UNGROUNDED_SOURCE',
@@ -390,6 +432,11 @@ export function validateNewsItem(
   }
 
   const isVerified = issues.length === 0;
+  const verificationStatus: VerificationStatus = !isVerified
+    ? 'Needs review'
+    : hasGroundingSources
+      ? 'Verified'
+      : 'Schema-Valid';
 
   const normalizedItem: NewsItem = {
     ...item,
@@ -407,9 +454,10 @@ export function validateNewsItem(
     id,
     raw: { ...raw },
     data: normalizedItem,
-    verificationStatus: isVerified ? 'Verified' : 'Needs review',
+    verificationStatus,
     validationIssues: issues,
     isVerified,
+    isGrounded: groundedMatch,
   };
 }
 

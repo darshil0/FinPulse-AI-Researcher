@@ -101,11 +101,13 @@ Before schema parsing, `validateNewsItem` preserves the unmodified parsed input 
 | `Impact` | `IMPACT_ENUM` (`High`, `Medium`, `Low`, case-insensitive normalization) | `INVALID_IMPACT` |
 | `Sentiment_Explanation` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
 
-### Structure of `Verified` vs `Needs Review` Items
+### Structure of `Verified`, `Schema-Valid`, and `Needs Review` Items
 
 Every parsed row is wrapped in a `ValidatedNewsItem` record alongside a run-level `ValidationSummary`:
 
 ```ts
+type VerificationStatus = 'Verified' | 'Schema-Valid' | 'Needs review';
+
 interface ValidationIssue {
   field: string;      // Column name or 'Row' for extra columns
   code: string;       // e.g., MISSING_REQUIRED_FIELD, PLACEHOLDER_URL, UNGROUNDED_SOURCE
@@ -117,9 +119,10 @@ interface ValidatedNewsItem {
   id: string;
   raw: Record<string, unknown>;                   // Unmodified parsed row object (including extra columns)
   data: NewsItem;                                 // Trimmed output row with normalized Sentiment & Impact
-  verificationStatus: 'Verified' | 'Needs review'; // Displayed as "Needs Review" in UI filter tabs
+  verificationStatus: VerificationStatus;         // 'Verified' (grounded), 'Schema-Valid' (syntax-only), or 'Needs review'
   validationIssues: ValidationIssue[];
   isVerified: boolean;
+  isGrounded?: boolean;
 }
 
 interface ValidationSummary {
@@ -131,7 +134,7 @@ interface ValidationSummary {
 }
 ```
 
-- **Structure of a `Verified` item** (`issues.length === 0`):
+- **Structure of a `Verified` item** (`issues.length === 0` with `groundingSources` domain match):
   ```json
   {
     "id": "row-0-...",
@@ -139,10 +142,25 @@ interface ValidationSummary {
     "data": { "Date": "2025-02-21", "Time": "14:05", "Sentiment": "Positive", "...": "..." },
     "verificationStatus": "Verified",
     "validationIssues": [],
-    "isVerified": true
+    "isVerified": true,
+    "isGrounded": true
   }
   ```
-  - Badged green in `NewsTable` and `TraceabilityPanel`, included in **All Rows** and **Verified Only**, and counted toward `summary.verifiedRows`. When every parsed row in a run is verified, the run status is `success`.
+  - Badged green (`Verified`) in `NewsTable` and `TraceabilityPanel`, meaning schema, strict calendar date, requested range, and source domain grounding all passed.
+
+- **Structure of a `Schema-Valid` item** (`issues.length === 0` without `groundingSources`):
+  ```json
+  {
+    "id": "row-0-...",
+    "raw": { "Date": "2025-02-21", "Time": "14:05", "Sentiment": "positive", "...": "..." },
+    "data": { "Date": "2025-02-21", "Time": "14:05", "Sentiment": "Positive", "...": "..." },
+    "verificationStatus": "Schema-Valid",
+    "validationIssues": [],
+    "isVerified": true,
+    "isGrounded": false
+  }
+  ```
+  - Badged sky-blue (`Schema-Valid`) when no grounding sources were available to corroborate `Source_URL` against source domains, transparently indicating that only schema/syntax, calendar, and range checks ran.
 
 - **Structure of a `Needs Review` item** (`issues.length > 0`):
   ```json
@@ -291,7 +309,7 @@ npm audit --audit-level=critical
 # Run strict TypeScript type checking (tsc --noEmit)
 npm run lint
 
-# Run the Vitest unit test suite (55 tests across 8 files)
+# Run the Vitest unit test suite (56 tests across 8 files)
 npm test
 
 # Build the production bundle into dist/

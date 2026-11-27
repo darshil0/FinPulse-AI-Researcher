@@ -164,4 +164,52 @@ describe('UI Verification, Analytics & Traceability Components', () => {
       screen.getByText(/No Verified rows available for analytics in this run/i)
     ).toBeDefined();
   });
+
+  it('renders Schema-Valid badge and filter tab when rows pass syntax checks without grounding', () => {
+    const schemaValidOnlyItems: ValidatedNewsItem[] = [
+      {
+        ...sampleItems[0],
+        verificationStatus: 'Schema-Valid',
+        isVerified: true,
+        isGrounded: false,
+      },
+      sampleItems[1],
+    ];
+
+    render(
+      <NewsTable
+        items={schemaValidOnlyItems}
+        sortConfig={{ key: 'Date', direction: 'desc' }}
+        onSort={vi.fn()}
+        statusFilter="all"
+        setStatusFilter={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('Status: Schema-Valid')).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Schema-Valid Only \(1\)/i })).toBeDefined();
+
+    render(
+      <TraceabilityPanel
+        runId="run-1764000000000-schema"
+        query="Syntax Check"
+        timestamp={Date.now()}
+        status="partial_success"
+        modelName="gemini-3-flash-preview"
+        rawResponse="csv"
+        groundingSources={[]}
+        items={schemaValidOnlyItems}
+        summary={{
+          totalRows: 2,
+          verifiedRows: 1,
+          needsReviewRows: 1,
+          hasParseErrors: false,
+          parseErrors: [],
+        }}
+      />
+    );
+
+    expect(screen.getByText('1 Schema-Valid')).toBeDefined();
+    expect(screen.getAllByText('Schema-Valid').length).toBeGreaterThanOrEqual(2);
+  });
 });
