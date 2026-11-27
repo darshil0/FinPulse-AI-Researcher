@@ -24,7 +24,7 @@ import { NewsTable } from './components/NewsTable';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { TraceabilityPanel, PersistenceState } from './components/TraceabilityPanel';
 import { SortConfig, NewsItem } from './types';
-import { ValidatedNewsItem } from './lib/validation';
+import { ValidatedNewsItem, VerificationStatus } from './lib/validation';
 import {
   saveResearchRun,
   getAllResearchRuns,
@@ -57,6 +57,40 @@ function getTodayIsoLocal(): string {
   return `${y}-${m}-${d}`;
 }
 
+function resolveRowVerificationStatus(item: ValidatedNewsItem): VerificationStatus {
+  if (!item.isVerified || item.verificationStatus === 'Needs review') {
+    return 'Needs review';
+  }
+  if (item.verificationStatus === 'Schema-Valid' || item.isGrounded === false) {
+    return 'Schema-Valid';
+  }
+  return 'Verified';
+}
+
+type ImmutableResearchRun = Readonly<StoredResearchRun>;
+
+function createStoredRunSnapshot(
+  id: string,
+  frozenQuery: string,
+  frozenStartDate: string,
+  frozenEndDate: string,
+  result: ResearchResult
+): ImmutableResearchRun {
+  return Object.freeze({
+    id,
+    query: frozenQuery,
+    timestamp: result.timestamp,
+    startDate: frozenStartDate,
+    endDate: frozenEndDate,
+    status: result.status,
+    rawResponse: result.rawResponse,
+    groundingSources: result.groundingSources,
+    items: result.items,
+    summary: result.summary,
+    modelName: result.modelName,
+  });
+}
+
 export default function App() {
   const [query, setQuery] = useState('Get all legit financial news about global tech markets');
   const [startDate, setStartDate] = useState('');
@@ -66,9 +100,9 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const requestSeqRef = useRef(0);
 
-  // Active Research Result State (immutable provenance stored on result)
+  // Active Research Result & Immutable StoredResearchRun Snapshot State
   const [currentResult, setCurrentResult] = useState<ResearchResult | null>(null);
-  const [runId, setRunId] = useState<string>('');
+  const [activeRunSnapshot, setActiveRunSnapshot] = useState<ImmutableResearchRun | null>(null);
   const [persistenceState, setPersistenceState] = useState<PersistenceState>('saved');
 
   const [filterText, setFilterText] = useState('');
@@ -94,6 +128,7 @@ export default function App() {
     const today = getTodayIsoLocal();
     if (sDate && sDate > today) {
       setShowTraceability(false);
+      setActiveRunSnapshot(null);
       setPersistenceState('not_saved');
       setCurrentResult({
         status: 'network_error',
@@ -120,6 +155,7 @@ export default function App() {
 
     if (sDate && eDate && new Date(sDate) > new Date(eDate)) {
       setShowTraceability(false);
+      setActiveRunSnapshot(null);
       setPersistenceState('not_saved');
       setCurrentResult({
         status: 'network_error',
@@ -145,45 +181,49 @@ export default function App() {
     }
 
     const seq = ++requestSeqRef.current;
+    const frozenQuery = searchQuery;
+    const frozenStartDate = sDate;
+    const frozenEndDate = eDate;
+
     setIsLoading(true);
     setCurrentResult(null);
+    setActiveRunSnapshot(null);
     setShowTraceability(false);
     setFilterText('');
     setStatusFilter('all');
 
     const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    setRunId(newRunId);
 
     const controller = new AbortController();
     abortRef.current = controller;
 
     try {
-      const result = await researchFinancialNews(searchQuery, sDate, eDate, controller.signal);
+      const result = await researchFinancialNews(
+        frozenQuery,
+        frozenStartDate,
+        frozenEndDate,
+        controller.signal
+      );
       if (seq !== requestSeqRef.current) return;
 
       const frozenResult: ResearchResult = {
         ...result,
-        query: searchQuery,
-        startDate: sDate,
-        endDate: eDate,
+        query: frozenQuery,
+        startDate: frozenStartDate,
+        endDate: frozenEndDate,
       };
       setCurrentResult(frozenResult);
 
       // Skip persisting network / rate-limit errors in research history
       if (result.status !== 'network_error') {
-        const runRecord: StoredResearchRun = {
-          id: newRunId,
-          query: searchQuery,
-          timestamp: result.timestamp,
-          startDate: sDate,
-          endDate: eDate,
-          status: result.status,
-          rawResponse: result.rawResponse,
-          groundingSources: result.groundingSources,
-          items: result.items,
-          summary: result.summary,
-          modelName: result.modelName,
-        };
+        const runRecord = createStoredRunSnapshot(
+          newRunId,
+          frozenQuery,
+          frozenStartDate,
+          frozenEndDate,
+          result
+        );
+        setActiveRunSnapshot(runRecord);
 
         await saveResearchRun(runRecord);
         if (seq !== requestSeqRef.current) return;
@@ -200,14 +240,15 @@ export default function App() {
         err instanceof Error && err.message
           ? err.message
           : 'Failed to fetch financial news. Please try again.';
+      setActiveRunSnapshot(null);
       setPersistenceState('not_saved');
       setCurrentResult({
         status: 'network_error',
         errorCode: 'NETWORK_FAILURE',
         errorMessage: message,
-        query: searchQuery,
-        startDate: sDate,
-        endDate: eDate,
+        query: frozenQuery,
+        startDate: frozenStartDate,
+        endDate: frozenEndDate,
         rawResponse: '',
         groundingSources: [],
         items: [],
@@ -327,13 +368,19 @@ export default function App() {
     setStatusFilter('all');
 
     if (item.items && item.items.length > 0) {
-      setRunId(item.id);
-      setPersistenceState('saved');
-      setCurrentResult({
-        status: item.status,
+      const restoredSnapshot: ImmutableResearchRun = Object.freeze({
+        ...item,
         query: item.query,
         startDate: sDate,
         endDate: eDate,
+      });
+      setActiveRunSnapshot(restoredSnapshot);
+      setPersistenceState('saved');
+      setCurrentResult({
+        status: item.status,
+        query: restoredSnapshot.query,
+        startDate: restoredSnapshot.startDate,
+        endDate: restoredSnapshot.endDate,
         rawResponse: item.rawResponse || '',
         groundingSources: item.groundingSources || [],
         items: item.items,
@@ -346,9 +393,9 @@ export default function App() {
     }
   };
 
-  const runQuery = currentResult?.query ?? query;
-  const runStartDate = currentResult?.startDate ?? '';
-  const runEndDate = currentResult?.endDate ?? '';
+  const runQuery = activeRunSnapshot?.query ?? currentResult?.query ?? '';
+  const runStartDate = activeRunSnapshot?.startDate ?? currentResult?.startDate ?? '';
+  const runEndDate = activeRunSnapshot?.endDate ?? currentResult?.endDate ?? '';
 
   const handleExportXLSX = () => {
     if (!currentResult) return;
@@ -468,11 +515,22 @@ export default function App() {
                             <span>{new Date(item.timestamp).toLocaleString()}</span>
                             <span aria-hidden="true">·</span>
                             <span className="font-mono text-slate-600">
-                              {item.summary?.verifiedRows ?? 0}{' '}
-                              {!item.items?.some((r) => r.verificationStatus === 'Verified') &&
-                              item.items?.some((r) => r.verificationStatus === 'Schema-Valid')
-                                ? 'schema-valid'
-                                : 'verified'}
+                              {(() => {
+                                const runItems = item.items ?? [];
+                                const groundedCount = runItems.filter(
+                                  (r) => resolveRowVerificationStatus(r) === 'Verified'
+                                ).length;
+                                const schemaValidCount = runItems.filter(
+                                  (r) => resolveRowVerificationStatus(r) === 'Schema-Valid'
+                                ).length;
+                                if (schemaValidCount > 0 && groundedCount === 0) {
+                                  return `${schemaValidCount} schema-valid`;
+                                }
+                                if (schemaValidCount > 0 && groundedCount > 0) {
+                                  return `${groundedCount} verified · ${schemaValidCount} schema-valid`;
+                                }
+                                return `${item.summary?.verifiedRows ?? groundedCount} verified`;
+                              })()}
                             </span>
                           </div>
                         </button>
@@ -738,25 +796,25 @@ export default function App() {
 
         {/* Traceability Panel Drawer (available across success, partial_success, unparseable, no_results) */}
         <AnimatePresence>
-          {canShowTraceability && showTraceability && currentResult && (
+          {canShowTraceability && showTraceability && activeRunSnapshot && (
             <motion.div
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
             >
               <TraceabilityPanel
-                runId={runId}
-                query={runQuery}
-                startDate={runStartDate}
-                endDate={runEndDate}
-                timestamp={currentResult.timestamp}
-                status={currentResult.status}
+                runId={activeRunSnapshot.id}
+                query={activeRunSnapshot.query}
+                startDate={activeRunSnapshot.startDate}
+                endDate={activeRunSnapshot.endDate}
+                timestamp={activeRunSnapshot.timestamp}
+                status={activeRunSnapshot.status}
                 persistenceState={persistenceState}
-                modelName={currentResult.modelName}
-                rawResponse={currentResult.rawResponse}
-                groundingSources={currentResult.groundingSources}
-                items={currentResult.items}
-                summary={currentResult.summary}
+                modelName={activeRunSnapshot.modelName}
+                rawResponse={activeRunSnapshot.rawResponse}
+                groundingSources={activeRunSnapshot.groundingSources}
+                items={activeRunSnapshot.items}
+                summary={activeRunSnapshot.summary}
                 onClose={() => setShowTraceability(false)}
               />
             </motion.div>
@@ -774,19 +832,44 @@ export default function App() {
                   <div className="flex flex-wrap items-center gap-2.5">
                     <h3 className="text-lg font-bold text-slate-900">Research Results</h3>
                     {(() => {
-                      const schemaValidOnly =
-                        !currentResult.items.some((i) => i.verificationStatus === 'Verified') &&
-                        currentResult.items.some((i) => i.verificationStatus === 'Schema-Valid');
+                      const groundedVerifiedCount = currentResult.items.filter(
+                        (i) => resolveRowVerificationStatus(i) === 'Verified'
+                      ).length;
+                      const schemaValidCount = currentResult.items.filter(
+                        (i) => resolveRowVerificationStatus(i) === 'Schema-Valid'
+                      ).length;
+
+                      if (groundedVerifiedCount === 0 && schemaValidCount > 0) {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold tabular-nums text-sky-700">
+                            <ShieldCheck size={14} />
+                            {schemaValidCount} Schema-Valid
+                          </span>
+                        );
+                      }
+
+                      if (groundedVerifiedCount > 0 && schemaValidCount > 0) {
+                        return (
+                          <>
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold tabular-nums text-emerald-700">
+                              <ShieldCheck size={14} />
+                              {groundedVerifiedCount} Verified
+                            </span>
+                            <span aria-hidden="true" className="text-slate-300">
+                              ·
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold tabular-nums text-sky-700">
+                              <ShieldCheck size={14} />
+                              {schemaValidCount} Schema-Valid
+                            </span>
+                          </>
+                        );
+                      }
+
                       return (
-                        <span
-                          className={cn(
-                            'inline-flex items-center gap-1 text-xs font-semibold tabular-nums',
-                            schemaValidOnly ? 'text-sky-700' : 'text-emerald-700'
-                          )}
-                        >
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold tabular-nums text-emerald-700">
                           <ShieldCheck size={14} />
-                          {currentResult.summary.verifiedRows}{' '}
-                          {schemaValidOnly ? 'Schema-Valid' : 'Verified'}
+                          {currentResult.summary.verifiedRows} Verified
                         </span>
                       );
                     })()}
@@ -859,6 +942,7 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       setCurrentResult(null);
+                      setActiveRunSnapshot(null);
                       setShowTraceability(false);
                       setFilterText('');
                     }}
@@ -878,10 +962,21 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <Filter size={16} className="text-slate-400" />
                     <h4 className="text-sm font-bold text-slate-700">
-                      {!currentResult.items.some((i) => i.verificationStatus === 'Verified') &&
-                      currentResult.items.some((i) => i.verificationStatus === 'Schema-Valid')
-                        ? 'Interactive Schema-Valid Data Grid'
-                        : 'Interactive Verified Data Grid'}
+                      {(() => {
+                        const hasVerified = currentResult.items.some(
+                          (i) => resolveRowVerificationStatus(i) === 'Verified'
+                        );
+                        const hasSchemaValid = currentResult.items.some(
+                          (i) => resolveRowVerificationStatus(i) === 'Schema-Valid'
+                        );
+                        if (!hasVerified && hasSchemaValid) {
+                          return 'Interactive Schema-Valid Data Grid';
+                        }
+                        if (hasVerified && hasSchemaValid) {
+                          return 'Interactive Verified & Schema-Valid Data Grid';
+                        }
+                        return 'Interactive Verified Data Grid';
+                      })()}
                     </h4>
                   </div>
                   <div className="relative max-w-xs w-full">

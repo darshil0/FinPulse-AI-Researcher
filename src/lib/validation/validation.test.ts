@@ -366,40 +366,29 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
     expect(isSourceUrlGrounded('https://www.reuters.com/world', [])).toBe(false);
   });
 
-  it('parses Date fields with validateDate, enforces real calendar dates, and checks startDate/endDate bounds', () => {
-    // Valid leap-year date within inclusive range
-    const leapOk = validateDate(' 2024-02-29 ', {
-      startDate: '2024-02-29',
-      endDate: '2024-03-01',
-      referenceDate: '2026-11-27',
-    });
-    expect(leapOk.valid).toBe(true);
-    expect(leapOk.normalizedDate).toBe('2024-02-29');
-    expect(leapOk.parsedDate?.toISOString()).toBe('2024-02-29T00:00:00.000Z');
-    expect(leapOk.issues).toHaveLength(0);
+  it('parses Date fields with validateDate, enforces real calendar dates, and returns boolean for startDate/endDate bounds', () => {
+    // Valid leap-year date within inclusive positional bounds
+    expect(validateDate(' 2024-02-29 ', '2024-02-29', '2024-03-01')).toBe(true);
+    expect(
+      validateDate('2024-02-29', {
+        startDate: '2024-02-29',
+        endDate: '2024-03-01',
+      })
+    ).toBe(true);
 
-    // Non-leap-year Feb 29 must fail calendar validation
-    const nonLeapBad = validateDate('2025-02-29');
-    expect(nonLeapBad.valid).toBe(false);
-    expect(nonLeapBad.parsedDate).toBeUndefined();
-    expect(nonLeapBad.issues[0].code).toBe('INVALID_DATE');
+    // Non-leap-year Feb 29 and malformed dates must return false
+    expect(validateDate('2025-02-29')).toBe(false);
+    expect(validateDate('2026-02-30')).toBe(false);
+    expect(validateDate('not-a-date')).toBe(false);
 
     // Outside upper and lower requested bounds
-    const beforeStart = validateDate('2025-02-09', {
-      startDate: '2025-02-10',
-      endDate: '2025-02-20',
-      referenceDate: '2026-11-27',
-    });
-    expect(beforeStart.valid).toBe(false);
-    expect(beforeStart.issues.some((i) => i.code === 'DATE_OUT_OF_RANGE')).toBe(true);
+    expect(validateDate('2025-02-09', '2025-02-10', '2025-02-20')).toBe(false);
+    expect(validateDate('2025-02-21', '2025-02-10', '2025-02-20')).toBe(false);
 
-    const afterEnd = validateDate('2025-02-21', {
-      startDate: '2025-02-10',
-      endDate: '2025-02-20',
-      referenceDate: '2026-11-27',
-    });
-    expect(afterEnd.valid).toBe(false);
-    expect(afterEnd.issues.some((i) => i.code === 'DATE_OUT_OF_RANGE')).toBe(true);
+    // Open-ended single-side bounds
+    expect(validateDate('2025-02-15', '2025-02-10')).toBe(true);
+    expect(validateDate('2025-02-15', undefined, '2025-02-20')).toBe(true);
+    expect(validateDate('2025-02-25', undefined, '2025-02-20')).toBe(false);
   });
 
   it('verifies Source_URL hostname existence via isGrounded against GroundingSourceRef and domain strings', () => {

@@ -170,13 +170,20 @@ describe('App Orchestration, Provenance & Export Integration', () => {
 
     render(<App />);
     const queryInput = screen.getByLabelText('Financial research query');
+    const startDateInput = screen.getByLabelText('Start Date');
+    const endDateInput = screen.getByLabelText('End Date');
+
     fireEvent.change(queryInput, { target: { value: 'Frozen NVDA Query' } });
+    fireEvent.change(startDateInput, { target: { value: '2025-02-10' } });
+    fireEvent.change(endDateInput, { target: { value: '2025-02-21' } });
     fireEvent.click(screen.getByRole('button', { name: /Run Agent/i }));
 
     await screen.findByText('Research Results');
 
-    // Mutate live form input AFTER completion
+    // Mutate live form inputs AFTER completion
     fireEvent.change(queryInput, { target: { value: 'Unrelated Edited Query' } });
+    fireEvent.change(startDateInput, { target: { value: '2025-01-01' } });
+    fireEvent.change(endDateInput, { target: { value: '2025-01-15' } });
 
     // Switch table status filter to Verified Only (exports should now only pass verified item)
     fireEvent.click(screen.getByRole('tab', { name: /Verified Only \(1\)/i }));
@@ -186,6 +193,8 @@ describe('App Orchestration, Provenance & Export Integration', () => {
       [verifiedRow],
       expect.objectContaining({
         query: 'Frozen NVDA Query',
+        startDate: '2025-02-10',
+        endDate: '2025-02-21',
         includeNeedsReview: false,
       })
     );
@@ -193,10 +202,22 @@ describe('App Orchestration, Provenance & Export Integration', () => {
     fireEvent.click(screen.getByRole('button', { name: /Export CSV \(1\)/i }));
     expect(csvSpy).toHaveBeenCalledWith([verifiedRow], false, 'Frozen NVDA Query');
 
-    // Traceability drawer displays frozen query, not edited input
+    // Traceability drawer displays frozen query and date range, not edited inputs
     fireEvent.click(screen.getByRole('button', { name: /Traceability Audit/i }));
     await waitFor(() => {
       expect(screen.getByText('Frozen NVDA Query')).toBeDefined();
+      expect(screen.getByText('2025-02-10 to 2025-02-21')).toBeDefined();
+    });
+    expect(screen.queryByText('Unrelated Edited Query')).toBeNull();
+    expect(screen.queryByText('2025-01-01 to 2025-01-15')).toBeNull();
+
+    // Persisted StoredResearchRun in IndexedDB preserves immutable run parameters
+    const storedRuns = await getAllResearchRuns();
+    expect(storedRuns).toHaveLength(1);
+    expect(storedRuns[0]).toMatchObject({
+      query: 'Frozen NVDA Query',
+      startDate: '2025-02-10',
+      endDate: '2025-02-21',
     });
   });
 

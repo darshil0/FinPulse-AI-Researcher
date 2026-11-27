@@ -107,16 +107,23 @@ export function isValidHttpPublicUrl(rawUrl: string): boolean {
   }
 }
 
-export function isValidCalendarDate(dateStr: string): boolean {
-  const trimmed = dateStr.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return false;
+function parseIsoCalendarDate(dateStr: string): Date | null {
+  const trimmed = String(dateStr ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return null;
   const [y, m, d] = trimmed.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
-  return (
-    dt.getUTCFullYear() === y &&
-    dt.getUTCMonth() === m - 1 &&
-    dt.getUTCDate() === d
-  );
+  if (
+    dt.getUTCFullYear() !== y ||
+    dt.getUTCMonth() !== m - 1 ||
+    dt.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return dt;
+}
+
+export function isValidCalendarDate(dateStr: string): boolean {
+  return parseIsoCalendarDate(dateStr) !== null;
 }
 
 function getDefaultMaxAllowedDate(): string {
@@ -143,18 +150,66 @@ export interface DateValidationResult {
 }
 
 /**
- * Parses a candidate `Date` value, verifies strict YYYY-MM-DD calendar validity
- * (rejecting rollovers such as `2026-02-30`), checks against future dates, and
- * ensures it falls within the requested `startDate` and `endDate` range.
+ * Parses a candidate `Date` value as a strict `YYYY-MM-DD` string, validates its
+ * calendar existence, and returns a boolean indicating whether it falls within
+ * the provided `startDate` and `endDate` bounds (inclusive).
  */
 export function validateDate(
+  dateStr: string,
+  startDate?: string,
+  endDate?: string
+): boolean;
+export function validateDate(
+  dateStr: string,
+  options?: DateValidationOptions
+): boolean;
+export function validateDate(
+  dateStr: string,
+  startDateOrOptions?: string | DateValidationOptions,
+  endDateArg?: string
+): boolean {
+  const parsedDate = parseIsoCalendarDate(dateStr);
+  if (!parsedDate) return false;
+
+  const isOptionsObj =
+    startDateOrOptions !== null && typeof startDateOrOptions === 'object';
+  const startDate = isOptionsObj
+    ? startDateOrOptions.startDate
+    : startDateOrOptions;
+  const endDate = isOptionsObj
+    ? startDateOrOptions.endDate
+    : endDateArg;
+
+  if (startDate && startDate.trim()) {
+    const startDt = parseIsoCalendarDate(startDate);
+    if (!startDt || parsedDate.getTime() < startDt.getTime()) {
+      return false;
+    }
+  }
+
+  if (endDate && endDate.trim()) {
+    const endDt = parseIsoCalendarDate(endDate);
+    if (!endDt || parsedDate.getTime() > endDt.getTime()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Detailed calendar, future-date, and date-range validator producing structured
+ * `ValidationIssue` entries for `validateNewsItem`.
+ */
+export function validateDateDetails(
   dateStr: string,
   options?: DateValidationOptions
 ): DateValidationResult {
   const trimmed = String(dateStr ?? '').trim();
   const issues: ValidationIssue[] = [];
+  const parsedDate = parseIsoCalendarDate(trimmed);
 
-  if (!isValidCalendarDate(trimmed)) {
+  if (!parsedDate) {
     issues.push({
       field: 'Date',
       code: 'INVALID_DATE',
@@ -163,9 +218,6 @@ export function validateDate(
     });
     return { valid: false, issues };
   }
-
-  const [year, month, day] = trimmed.split('-').map(Number);
-  const parsedDate = new Date(Date.UTC(year, month - 1, day));
 
   const maxAllowedDate =
     options?.referenceDate && isValidCalendarDate(options.referenceDate)
@@ -190,7 +242,7 @@ export function validateDate(
       ? options.endDate.trim()
       : undefined;
 
-  if ((startBound && trimmed < startBound) || (endBound && trimmed > endBound)) {
+  if (!validateDate(trimmed, startBound, endBound)) {
     issues.push({
       field: 'Date',
       code: 'DATE_OUT_OF_RANGE',
@@ -542,7 +594,7 @@ export function validateNewsItem(
   }
 
   // Calendar, future-date, and requested startDate/endDate range validation
-  const dateValidation = validateDate(item.Date, {
+  const dateValidation = validateDateDetails(item.Date, {
     startDate: context?.startDate,
     endDate: context?.endDate,
     referenceDate: context?.referenceDate,

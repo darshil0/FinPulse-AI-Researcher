@@ -34,8 +34,9 @@ function isSafeHttpUrl(url?: string): boolean {
 const VerificationBadge: React.FC<{
   isVerified: boolean;
   verificationStatus?: ValidatedNewsItem['verificationStatus'];
+  isGrounded?: boolean;
   issuesCount: number;
-}> = ({ isVerified, verificationStatus, issuesCount }) => {
+}> = ({ isVerified, verificationStatus, isGrounded, issuesCount }) => {
   if (!isVerified || verificationStatus === 'Needs review') {
     return (
       <span
@@ -48,7 +49,7 @@ const VerificationBadge: React.FC<{
     );
   }
 
-  if (verificationStatus === 'Schema-Valid') {
+  if (verificationStatus === 'Schema-Valid' || isGrounded === false) {
     return (
       <span
         aria-label="Status: Schema-Valid"
@@ -263,6 +264,7 @@ const NewsRow: React.FC<{ item: ValidatedNewsItem; idx: number }> = ({ item, idx
           <VerificationBadge
             isVerified={item.isVerified}
             verificationStatus={item.verificationStatus}
+            isGrounded={item.isGrounded}
             issuesCount={item.validationIssues.length}
           />
         </td>
@@ -428,9 +430,12 @@ export const NewsTable: React.FC<NewsTableProps> = ({
 }) => {
   const verifiedCount = items.filter((i) => i.isVerified).length;
   const reviewCount = items.length - verifiedCount;
-  const hasGroundedItems = items.some((i) => i.verificationStatus === 'Verified');
+  const hasGroundedItems = items.some(
+    (i) => i.isVerified && i.verificationStatus !== 'Schema-Valid' && i.isGrounded !== false
+  );
   const hasSchemaValidOnly =
-    !hasGroundedItems && items.some((i) => i.verificationStatus === 'Schema-Valid');
+    !hasGroundedItems &&
+    items.some((i) => i.isVerified && (i.verificationStatus === 'Schema-Valid' || i.isGrounded === false));
 
   const filteredByStatus = items.filter((item) => {
     if (statusFilter === 'verified') return item.isVerified;

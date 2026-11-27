@@ -205,15 +205,33 @@ export const TraceabilityPanel: React.FC<TraceabilityPanelProps> = ({
             <span
               className={cn(
                 'text-sm font-semibold',
-                !items.some((i) => i.verificationStatus === 'Verified') &&
-                  items.some((i) => i.verificationStatus === 'Schema-Valid')
+                !items.some(
+                  (i) =>
+                    i.isVerified &&
+                    i.verificationStatus !== 'Schema-Valid' &&
+                    i.isGrounded !== false
+                ) &&
+                  items.some(
+                    (i) =>
+                      i.isVerified &&
+                      (i.verificationStatus === 'Schema-Valid' || i.isGrounded === false)
+                  )
                   ? 'text-sky-400'
                   : 'text-emerald-400'
               )}
             >
               {summary.verifiedRows}{' '}
-              {!items.some((i) => i.verificationStatus === 'Verified') &&
-              items.some((i) => i.verificationStatus === 'Schema-Valid')
+              {!items.some(
+                (i) =>
+                  i.isVerified &&
+                  i.verificationStatus !== 'Schema-Valid' &&
+                  i.isGrounded !== false
+              ) &&
+              items.some(
+                (i) =>
+                  i.isVerified &&
+                  (i.verificationStatus === 'Schema-Valid' || i.isGrounded === false)
+              )
                 ? 'Schema-Valid'
                 : 'Verified'}
             </span>
@@ -317,7 +335,7 @@ export const TraceabilityPanel: React.FC<TraceabilityPanelProps> = ({
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-950 text-amber-400 rounded text-[10px] font-semibold border border-amber-800 shrink-0">
                           <AlertTriangle size={12} /> Needs review
                         </span>
-                      ) : item.verificationStatus === 'Schema-Valid' ? (
+                      ) : item.verificationStatus === 'Schema-Valid' || item.isGrounded === false ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-sky-950 text-sky-400 rounded text-[10px] font-semibold border border-sky-800 shrink-0">
                           <ShieldCheck size={12} /> Schema-Valid
                         </span>
