@@ -129,6 +129,84 @@ function getDefaultMaxAllowedDate(): string {
   return utcDate > localDate ? utcDate : localDate;
 }
 
+export interface DateValidationOptions {
+  startDate?: string;
+  endDate?: string;
+  referenceDate?: string;
+}
+
+export interface DateValidationResult {
+  valid: boolean;
+  normalizedDate?: string;
+  parsedDate?: Date;
+  issues: ValidationIssue[];
+}
+
+/**
+ * Parses a candidate `Date` value, verifies strict YYYY-MM-DD calendar validity
+ * (rejecting rollovers such as `2026-02-30`), checks against future dates, and
+ * ensures it falls within the requested `startDate` and `endDate` range.
+ */
+export function validateDate(
+  dateStr: string,
+  options?: DateValidationOptions
+): DateValidationResult {
+  const trimmed = String(dateStr ?? '').trim();
+  const issues: ValidationIssue[] = [];
+
+  if (!isValidCalendarDate(trimmed)) {
+    issues.push({
+      field: 'Date',
+      code: 'INVALID_DATE',
+      message: `Date '${trimmed}' is not a valid YYYY-MM-DD calendar date`,
+      rawValue: trimmed,
+    });
+    return { valid: false, issues };
+  }
+
+  const [year, month, day] = trimmed.split('-').map(Number);
+  const parsedDate = new Date(Date.UTC(year, month - 1, day));
+
+  const maxAllowedDate =
+    options?.referenceDate && isValidCalendarDate(options.referenceDate)
+      ? options.referenceDate.trim()
+      : getDefaultMaxAllowedDate();
+
+  if (trimmed > maxAllowedDate) {
+    issues.push({
+      field: 'Date',
+      code: 'FUTURE_DATE',
+      message: `Date '${trimmed}' is in the future (after ${maxAllowedDate})`,
+      rawValue: trimmed,
+    });
+  }
+
+  const startBound =
+    options?.startDate && isValidCalendarDate(options.startDate)
+      ? options.startDate.trim()
+      : undefined;
+  const endBound =
+    options?.endDate && isValidCalendarDate(options.endDate)
+      ? options.endDate.trim()
+      : undefined;
+
+  if ((startBound && trimmed < startBound) || (endBound && trimmed > endBound)) {
+    issues.push({
+      field: 'Date',
+      code: 'DATE_OUT_OF_RANGE',
+      message: `Date '${trimmed}' falls outside the requested range (${startBound || 'earliest'} to ${endBound || 'now'})`,
+      rawValue: trimmed,
+    });
+  }
+
+  return {
+    valid: issues.length === 0,
+    normalizedDate: trimmed,
+    parsedDate,
+    issues,
+  };
+}
+
 const MULTI_PART_PUBLIC_SUFFIXES = new Set([
   'co.uk',
   'org.uk',
@@ -167,48 +245,110 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+const GROUNDING_REDIRECT_HOSTS = new Set([
+  'vertexaisearch.cloud.google.com',
+]);
+
+/**
+ * Extracts a normalized public HTTP/HTTPS hostname (without leading `www.`)
+ * from a candidate `Source_URL`, or returns `null` if invalid or placeholder.
+ */
+export function extractSourceHostname(rawUrl: string): string | null {
+  if (!isValidHttpPublicUrl(rawUrl)) return null;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    return parsed.hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extracts the deduplicated list of publisher domains present in `groundingSources`
+ * (reading both `url` hostnames and domain-formatted source `title` strings, while
+ * excluding search redirect proxies).
+ */
+export function extractGroundedDomains(
+  groundingSources: GroundingSourceRef[]
+): string[] {
+  const domains = new Set<string>();
+  const domainInTitleRegex = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/gi;
+
+  for (const src of groundingSources) {
+    if (src.url) {
+      try {
+        const parsed = new URL(src.url.trim());
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+          if (
+            host.includes('.') &&
+            !isPlaceholderHost(host) &&
+            !GROUNDING_REDIRECT_HOSTS.has(host)
+          ) {
+            domains.add(host);
+          }
+        }
+      } catch {
+        // Ignore malformed grounding URL
+      }
+    }
+
+    if (src.title) {
+      const matches = src.title.match(domainInTitleRegex);
+      if (matches) {
+        for (const match of matches) {
+          const host = match.toLowerCase().replace(/^www\./, '');
+          if (!isPlaceholderHost(host) && !GROUNDING_REDIRECT_HOSTS.has(host)) {
+            domains.add(host);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(domains);
+}
+
+/**
+ * Compares the normalized hostname of `sourceUrl` against the grounded domain list
+ * extracted from `groundingSources` (and publisher title tokens for redirect links)
+ * to ensure the link is a valid, grounded source.
+ */
+export function isSourceUrlGrounded(
+  sourceUrl: string,
+  groundingSources: GroundingSourceRef[]
+): boolean {
+  if (!groundingSources || groundingSources.length === 0) return false;
+
+  const sourceHost = extractSourceHostname(sourceUrl);
+  if (!sourceHost) return false;
+
+  const regDomain = getRegistrableDomain(sourceHost);
+  const groundedDomains = extractGroundedDomains(groundingSources);
+
+  if (
+    groundedDomains.some(
+      (domain) =>
+        domain === sourceHost || getRegistrableDomain(domain) === regDomain
+    )
+  ) {
+    return true;
+  }
+
+  const brandToken = regDomain.split('.')[0];
+  if (brandToken.length < 3) return false;
+  const brandRegex = new RegExp(`\\b${escapeRegExp(brandToken)}\\b`, 'i');
+
+  return groundingSources.some(
+    (src) => typeof src.title === 'string' && brandRegex.test(src.title)
+  );
+}
+
 export function isUrlGrounded(
   url: string,
   groundingSources: GroundingSourceRef[]
 ): boolean {
-  if (groundingSources.length === 0) return true;
-  try {
-    const parsed = new URL(url.trim());
-    const cleanHost = parsed.hostname.toLowerCase().replace(/^www\./, '');
-    const regDomain = getRegistrableDomain(cleanHost);
-    const brandToken = regDomain.split('.')[0];
-    const brandRegex =
-      brandToken.length >= 3
-        ? new RegExp(`\\b${escapeRegExp(brandToken)}\\b`, 'i')
-        : null;
-
-    return groundingSources.some((src) => {
-      if (src.url) {
-        try {
-          const srcHost = new URL(src.url).hostname.toLowerCase().replace(/^www\./, '');
-          const srcReg = getRegistrableDomain(srcHost);
-          if (srcHost === cleanHost || srcReg === regDomain) {
-            return true;
-          }
-        } catch {
-          // Ignore malformed grounding URL
-        }
-      }
-      if (src.title) {
-        const titleLower = src.title.toLowerCase();
-        if (
-          titleLower.includes(cleanHost) ||
-          titleLower.includes(regDomain) ||
-          (brandRegex !== null && brandRegex.test(src.title))
-        ) {
-          return true;
-        }
-      }
-      return false;
-    });
-  } catch {
-    return false;
-  }
+  return isSourceUrlGrounded(url, groundingSources);
 }
 
 const UrlSchema = z
@@ -365,39 +505,17 @@ export function validateNewsItem(
     }
   }
 
-  // Domain calendar checks when Date syntax passed
-  if (isValidCalendarDate(item.Date)) {
-    const maxAllowedDate =
-      context?.referenceDate && isValidCalendarDate(context.referenceDate)
-        ? context.referenceDate
-        : getDefaultMaxAllowedDate();
-
-    if (item.Date > maxAllowedDate) {
-      issues.push({
-        field: 'Date',
-        code: 'FUTURE_DATE',
-        message: `Date '${item.Date}' is in the future (after ${maxAllowedDate})`,
-        rawValue: item.Date,
-      });
+  // Calendar, future-date, and requested startDate/endDate range validation
+  const dateValidation = validateDate(item.Date, {
+    startDate: context?.startDate,
+    endDate: context?.endDate,
+    referenceDate: context?.referenceDate,
+  });
+  for (const dateIssue of dateValidation.issues) {
+    if (dateIssue.code === 'INVALID_DATE' && issues.some((i) => i.field === 'Date')) {
+      continue;
     }
-
-    const startBound =
-      context?.startDate && isValidCalendarDate(context.startDate)
-        ? context.startDate
-        : undefined;
-    const endBound =
-      context?.endDate && isValidCalendarDate(context.endDate)
-        ? context.endDate
-        : undefined;
-
-    if ((startBound && item.Date < startBound) || (endBound && item.Date > endBound)) {
-      issues.push({
-        field: 'Date',
-        code: 'DATE_OUT_OF_RANGE',
-        message: `Date '${item.Date}' falls outside the requested range (${startBound || 'earliest'} to ${endBound || 'now'})`,
-        rawValue: item.Date,
-      });
-    }
+    issues.push(dateIssue);
   }
 
   // Grounding source corroboration check when Source_URL syntax passed
@@ -408,7 +526,7 @@ export function validateNewsItem(
   const groundedMatch =
     hasGroundingSources &&
     urlValidSyntax &&
-    isUrlGrounded(item.Source_URL, context!.groundingSources!);
+    isSourceUrlGrounded(item.Source_URL, context!.groundingSources!);
 
   if (hasGroundingSources && urlValidSyntax && !groundedMatch) {
     issues.push({

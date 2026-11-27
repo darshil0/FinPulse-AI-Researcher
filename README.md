@@ -77,8 +77,8 @@ FinPulse enforces a strict runtime validation boundary in `src/lib/validation/in
 
 Before schema parsing, `validateNewsItem` preserves the unmodified parsed input row in `raw`, extracts all 12 expected fields as trimmed strings for validation, and applies case-insensitive normalization to `Sentiment` and `Impact` (e.g., `"positive"` → `"Positive"`, `"high"` → `"High"`). The normalized candidate object is evaluated with `RawNewsItemSchema.safeParse(...)` plus domain verification rules using `ValidationContext` (`startDate`, `endDate`, `groundingSources`, `referenceDate`):
 
-- **`DateSchema` & Calendar/Range Checks**: Requires a strict `YYYY-MM-DD` real calendar date (`isValidCalendarDate`, rejecting invalid rollovers like `2026-02-30`) → `INVALID_DATE`. Domain rules further emit `FUTURE_DATE` when `Date` exceeds the current date (`referenceDate`) and `DATE_OUT_OF_RANGE` when outside the requested `startDate`..`endDate` bounds.
-- **`UrlSchema` & Domain/Grounding Checks**: `isValidHttpPublicUrl` requires a valid `http:` or `https:` URL with a dot-containing public hostname, emitting `MISSING_SOURCE_URL` for `""`/`"N/A"`, `PLACEHOLDER_URL` for local/reserved hosts (`localhost`, `127.0.0.1`, `example.com`, `.local`, `.invalid`, etc.), and `INVALID_URL_SCHEME` for other invalid URLs or disallowed schemes (`javascript:`, `data:`). When `groundingSources` are provided, `isUrlGrounded` emits `UNGROUNDED_SOURCE` if `Source_URL` does not match any returned grounding domain or title.
+- **`DateSchema` & `validateDate` Calendar/Range Checks**: `DateSchema` and `validateDate` parse `Date`, require a strict `YYYY-MM-DD` real calendar date (`isValidCalendarDate`, rejecting invalid rollovers like `2026-02-30`) → `INVALID_DATE`, emit `FUTURE_DATE` when `Date` exceeds the current date (`referenceDate`), and emit `DATE_OUT_OF_RANGE` when outside the requested `startDate`..`endDate` bounds.
+- **`UrlSchema` & Domain/Grounding Checks**: `isValidHttpPublicUrl` requires a valid `http:` or `https:` URL with a dot-containing public hostname, emitting `MISSING_SOURCE_URL` for `""`/`"N/A"`, `PLACEHOLDER_URL` for local/reserved hosts (`localhost`, `127.0.0.1`, `example.com`, `.local`, `.invalid`, etc.), and `INVALID_URL_SCHEME` for other invalid URLs or disallowed schemes (`javascript:`, `data:`). When `groundingSources` are provided, `isSourceUrlGrounded` compares `extractSourceHostname(Source_URL)` against the domain list from `extractGroundedDomains(groundingSources)` (and publisher titles for grounding redirect links), emitting `UNGROUNDED_SOURCE` if no match is found.
 - **`RawNewsItemSchema`**: `z.object(...)` requiring:
   - `Date` (`DateSchema`) and `Source_URL` (`UrlSchema`)
   - Non-empty trimmed strings (`z.string().trim().min(1)`) for `Time`, `Headline`, `Short_Summary`, `Primary_Ticker_or_Entity`, `Region_or_Market`, `Category`, `Source_Name`, and `Sentiment_Explanation` (`MISSING_REQUIRED_FIELD`)
@@ -228,7 +228,7 @@ See [SECURITY.md](./SECURITY.md) for the complete security architecture, `xlsx@0
 │   │   ├── export/excel.ts               # Shared sanitizeCell, UTF-8 BOM CSV & XLSX exporters
 │   │   ├── storage/db.ts                 # IndexedDB persistence + localStorage fallback
 │   │   ├── utils.ts                      # Tailwind class-merge utility (cn)
-│   │   └── validation/                   # Zod/domain schemas & edge-case tests (14)
+│   │   └── validation/                   # Zod/domain schemas & edge-case tests (16)
 │   ├── services/geminiService.ts         # Rate-limited, timeout-guarded Edge Function client
 │   ├── test/                             # Vitest suites (app, components, db, export, geminiService, validation)
 │   ├── tests/export.test.ts              # Formula-injection sanitizer tests (=HYPERLINK, +, -, @)
@@ -309,7 +309,7 @@ npm audit --audit-level=critical
 # Run strict TypeScript type checking (tsc --noEmit)
 npm run lint
 
-# Run the Vitest unit test suite (56 tests across 8 files)
+# Run the Vitest unit test suite (58 tests across 8 files)
 npm test
 
 # Build the production bundle into dist/

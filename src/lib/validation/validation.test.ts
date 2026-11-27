@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   RawNewsItemSchema,
+  extractGroundedDomains,
+  extractSourceHostname,
+  isSourceUrlGrounded,
+  validateDate,
   validateNewsItem,
   validateResearchResults,
 } from './index';
@@ -324,6 +328,77 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
     expect(matchingSubdomainCcTld.isVerified).toBe(true);
     expect(matchingSubdomainCcTld.isGrounded).toBe(true);
     expect(matchingSubdomainCcTld.verificationStatus).toBe('Verified');
+  });
+
+  it('extracts hostnames and compares Source_URL against grounded domain list cleanly', () => {
+    expect(extractSourceHostname('https://www.reuters.com/markets/us')).toBe('reuters.com');
+    expect(extractSourceHostname('https://example.com/fake')).toBeNull();
+    expect(extractSourceHostname('javascript:alert(1)')).toBeNull();
+
+    const domains = extractGroundedDomains([
+      { title: 'Bloomberg Markets', url: 'https://www.bloomberg.com/news/1' },
+      {
+        title: 'reuters.com',
+        url: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/xyz',
+      },
+      { title: 'Invalid local', url: 'http://localhost:3000/test' },
+    ]);
+    expect(domains).toEqual(['bloomberg.com', 'reuters.com']);
+
+    expect(
+      isSourceUrlGrounded('https://markets.bloomberg.com/article', [
+        { title: 'Bloomberg', url: 'https://www.bloomberg.com/markets' },
+      ])
+    ).toBe(true);
+
+    // Reject spoofed prefix domains and empty grounding lists
+    expect(
+      isSourceUrlGrounded('https://reuters.com.attacker.com/article', [
+        { title: 'reuters.com', url: 'https://www.reuters.com/world' },
+      ])
+    ).toBe(false);
+    expect(
+      isSourceUrlGrounded('https://evil-reuters.com/article', [
+        { title: 'reuters.com', url: 'https://www.reuters.com/world' },
+      ])
+    ).toBe(false);
+    expect(isSourceUrlGrounded('https://www.reuters.com/world', [])).toBe(false);
+  });
+
+  it('parses Date fields with validateDate, enforces real calendar dates, and checks startDate/endDate bounds', () => {
+    // Valid leap-year date within inclusive range
+    const leapOk = validateDate(' 2024-02-29 ', {
+      startDate: '2024-02-29',
+      endDate: '2024-03-01',
+      referenceDate: '2026-11-27',
+    });
+    expect(leapOk.valid).toBe(true);
+    expect(leapOk.normalizedDate).toBe('2024-02-29');
+    expect(leapOk.parsedDate?.toISOString()).toBe('2024-02-29T00:00:00.000Z');
+    expect(leapOk.issues).toHaveLength(0);
+
+    // Non-leap-year Feb 29 must fail calendar validation
+    const nonLeapBad = validateDate('2025-02-29');
+    expect(nonLeapBad.valid).toBe(false);
+    expect(nonLeapBad.parsedDate).toBeUndefined();
+    expect(nonLeapBad.issues[0].code).toBe('INVALID_DATE');
+
+    // Outside upper and lower requested bounds
+    const beforeStart = validateDate('2025-02-09', {
+      startDate: '2025-02-10',
+      endDate: '2025-02-20',
+      referenceDate: '2026-11-27',
+    });
+    expect(beforeStart.valid).toBe(false);
+    expect(beforeStart.issues.some((i) => i.code === 'DATE_OUT_OF_RANGE')).toBe(true);
+
+    const afterEnd = validateDate('2025-02-21', {
+      startDate: '2025-02-10',
+      endDate: '2025-02-20',
+      referenceDate: '2026-11-27',
+    });
+    expect(afterEnd.valid).toBe(false);
+    expect(afterEnd.issues.some((i) => i.code === 'DATE_OUT_OF_RANGE')).toBe(true);
   });
 });
 
