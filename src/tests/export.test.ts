@@ -205,9 +205,9 @@ describe('Formula Injection Sanitizer (src/lib/export/excel.ts)', () => {
       },
       validationIssues: [
         {
-          field: 'Source_Name',
+          field: '=SUM(A1:A2)',
           code: 'SUSPECT',
-          message: '=SUM(A1:A2)',
+          message: 'Formula payload in field name',
           rawValue: '-EvilSource',
         },
       ],

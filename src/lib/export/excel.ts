@@ -32,6 +32,29 @@ function sanitizeItemData(data: ValidatedNewsItem['data']): Record<string, strin
   return sanitized;
 }
 
+function formatExportRow(item: ValidatedNewsItem): Record<string, string> {
+  const safeData = sanitizeItemData(item.data);
+  const issuesText =
+    item.validationIssues.map((i) => `${i.field}: ${i.message}`).join('; ') || 'None';
+
+  return {
+    'Verification Status': sanitizeCell(item.verificationStatus),
+    'Validation Issues': sanitizeCell(issuesText),
+    Date: safeData.Date,
+    Time: safeData.Time,
+    'Primary Ticker / Entity': safeData.Primary_Ticker_or_Entity,
+    Headline: safeData.Headline,
+    'Short Summary': safeData.Short_Summary,
+    Category: safeData.Category,
+    'Region / Market': safeData.Region_or_Market,
+    Sentiment: safeData.Sentiment,
+    Impact: safeData.Impact,
+    'Sentiment Explanation': safeData.Sentiment_Explanation,
+    'Source Name': safeData.Source_Name,
+    'Source URL': safeData.Source_URL,
+  };
+}
+
 function sanitizeFilenamePart(value: string): string {
   return value
     .toLowerCase()
@@ -52,28 +75,7 @@ export function exportToXLSX(
   const workbook = XLSX.utils.book_new();
 
   // 1. Sheet 1: Research Results
-  const resultsData = filteredItems.map((item) => {
-    const safeData = sanitizeItemData(item.data);
-    const issuesText =
-      item.validationIssues.map((i) => `${i.field}: ${i.message}`).join('; ') || 'None';
-    return {
-      'Verification Status': sanitizeCell(item.verificationStatus),
-      'Validation Issues': sanitizeCell(issuesText),
-      'Date': safeData.Date,
-      'Time': safeData.Time,
-      'Primary Ticker / Entity': safeData.Primary_Ticker_or_Entity,
-      'Headline': safeData.Headline,
-      'Short Summary': safeData.Short_Summary,
-      'Category': safeData.Category,
-      'Region / Market': safeData.Region_or_Market,
-      'Sentiment': safeData.Sentiment,
-      'Impact': safeData.Impact,
-      'Sentiment Explanation': safeData.Sentiment_Explanation,
-      'Source Name': safeData.Source_Name,
-      'Source URL': safeData.Source_URL,
-    };
-  });
-
+  const resultsData = filteredItems.map(formatExportRow);
   const worksheet = XLSX.utils.json_to_sheet(resultsData);
 
   worksheet['!cols'] = [
@@ -98,8 +100,6 @@ export function exportToXLSX(
     worksheet['!autofilter'] = { ref: XLSX.utils.encode_range(range) };
   }
 
-  worksheet['!views'] = [{ state: 'frozen', xSplit: 0, ySplit: 1, activeCell: 'A2' }];
-
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Research Results');
 
   // 2. Sheet 2: Traceability & Audit Metadata
@@ -107,12 +107,21 @@ export function exportToXLSX(
     { Property: 'Search Query', Value: sanitizeCell(options.query || 'N/A') },
     { Property: 'Date Range Start', Value: sanitizeCell(options.startDate || 'N/A') },
     { Property: 'Date Range End', Value: sanitizeCell(options.endDate || 'N/A') },
-    { Property: 'Run Status', Value: sanitizeCell(options.status || 'N/A') },
+    {
+      Property: 'Run Status',
+      Value: sanitizeCell(options.status ? options.status.replace(/_/g, ' ') : 'N/A'),
+    },
     { Property: 'AI Model', Value: sanitizeCell(options.modelName || 'N/A') },
     { Property: 'Export Date', Value: new Date().toISOString() },
     { Property: 'Total Rows Parsed', Value: options.summary?.totalRows ?? items.length },
-    { Property: 'Verified Rows Count', Value: options.summary?.verifiedRows ?? items.filter((i) => i.isVerified).length },
-    { Property: 'Needs Review Rows Count', Value: options.summary?.needsReviewRows ?? items.filter((i) => !i.isVerified).length },
+    {
+      Property: 'Verified Rows Count',
+      Value: options.summary?.verifiedRows ?? items.filter((i) => i.isVerified).length,
+    },
+    {
+      Property: 'Needs Review Rows Count',
+      Value: options.summary?.needsReviewRows ?? items.filter((i) => !i.isVerified).length,
+    },
     { Property: 'Rows Included in This Export', Value: filteredItems.length },
     { Property: '', Value: '' },
     { Property: '=== Grounding Sources ===', Value: '' },
@@ -150,7 +159,10 @@ export function exportToXLSX(
   });
 
   if (issueCount === 0) {
-    metadataRows.push({ Property: 'Validation Issues', Value: 'All exported rows passed schema validation.' });
+    metadataRows.push({
+      Property: 'Validation Issues',
+      Value: 'All exported rows passed schema validation.',
+    });
   }
 
   const metaWorksheet = XLSX.utils.json_to_sheet(metadataRows);
@@ -173,17 +185,10 @@ export function exportToCSV(
     ? items
     : items.filter((item) => item.isVerified);
 
-  const csvRows = filteredItems.map((item) => {
-    const issuesText = item.validationIssues.map((i) => i.message).join('; ') || 'None';
-    return {
-      'Verification Status': sanitizeCell(item.verificationStatus),
-      'Validation Issues': sanitizeCell(issuesText),
-      ...sanitizeItemData(item.data),
-    };
-  });
-
+  const csvRows = filteredItems.map(formatExportRow);
   const csv = Papa.unparse(csvRows);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  // Prepend UTF-8 BOM so Excel preserves symbols like € / — and international text
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   const sanitizedQuery = sanitizeFilenamePart(query);

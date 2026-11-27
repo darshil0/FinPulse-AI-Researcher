@@ -7,6 +7,18 @@ export type SentimentType = (typeof SENTIMENT_ENUM)[number];
 export const IMPACT_ENUM = ['High', 'Medium', 'Low'] as const;
 export type ImpactType = (typeof IMPACT_ENUM)[number];
 
+export interface GroundingSourceRef {
+  title?: string;
+  url?: string;
+}
+
+export interface ValidationContext {
+  startDate?: string;
+  endDate?: string;
+  groundingSources?: GroundingSourceRef[];
+  referenceDate?: string;
+}
+
 export interface ValidationIssue {
   field: string;
   code: string;
@@ -16,7 +28,7 @@ export interface ValidationIssue {
 
 export interface ValidatedNewsItem {
   id: string;
-  raw: NewsItem;
+  raw: Record<string, unknown>;
   data: NewsItem;
   verificationStatus: 'Verified' | 'Needs review';
   validationIssues: ValidationIssue[];
@@ -50,24 +62,130 @@ export type ResearchErrorCode =
   | 'INVALID_RESPONSE_STRUCTURE'
   | 'INVALID_DATE_RANGE';
 
+const PLACEHOLDER_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  '::1',
+  'example.com',
+  'example.org',
+  'example.net',
+  'test.com',
+]);
+
+const RESERVED_TLD_SUFFIXES = ['.local', '.internal', '.invalid', '.localhost', '.example'];
+
+export function isPlaceholderHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (PLACEHOLDER_HOSTS.has(host)) return true;
+  if (
+    host.endsWith('.example.com') ||
+    host.endsWith('.example.org') ||
+    host.endsWith('.example.net') ||
+    host.endsWith('.test.com')
+  ) {
+    return true;
+  }
+  return RESERVED_TLD_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
+export function isValidHttpPublicUrl(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed.toUpperCase() === 'N/A') return false;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.toLowerCase();
+    if (!host || !host.includes('.')) return false;
+    if (isPlaceholderHost(host)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isValidCalendarDate(dateStr: string): boolean {
+  const trimmed = dateStr.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return false;
+  const [y, m, d] = trimmed.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === m - 1 &&
+    dt.getUTCDate() === d
+  );
+}
+
+function getDefaultMaxAllowedDate(): string {
+  const now = new Date();
+  const utcDate = now.toISOString().split('T')[0];
+  const localYear = now.getFullYear();
+  const localMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const localDay = String(now.getDate()).padStart(2, '0');
+  const localDate = `${localYear}-${localMonth}-${localDay}`;
+  return utcDate > localDate ? utcDate : localDate;
+}
+
+function getRegistrableDomain(hostname: string): string {
+  const clean = hostname.toLowerCase().replace(/^www\./, '');
+  const parts = clean.split('.');
+  if (parts.length <= 2) return clean;
+  return parts.slice(-2).join('.');
+}
+
+export function isUrlGrounded(
+  url: string,
+  groundingSources: GroundingSourceRef[]
+): boolean {
+  if (groundingSources.length === 0) return true;
+  try {
+    const parsed = new URL(url.trim());
+    const cleanHost = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const regDomain = getRegistrableDomain(cleanHost);
+    const brandToken = regDomain.split('.')[0];
+
+    return groundingSources.some((src) => {
+      if (src.url) {
+        try {
+          const srcHost = new URL(src.url).hostname.toLowerCase().replace(/^www\./, '');
+          const srcReg = getRegistrableDomain(srcHost);
+          if (srcHost === cleanHost || srcReg === regDomain) {
+            return true;
+          }
+        } catch {
+          // Ignore malformed grounding URL
+        }
+      }
+      if (src.title) {
+        const titleLower = src.title.toLowerCase();
+        if (
+          titleLower.includes(cleanHost) ||
+          titleLower.includes(regDomain) ||
+          (brandToken.length >= 3 && titleLower.includes(brandToken))
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+  } catch {
+    return false;
+  }
+}
+
 const UrlSchema = z
   .string()
   .trim()
-  .refine((url) => {
-    if (!url || url === 'N/A') return false;
-    try {
-      const parsed = new URL(url);
-      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-    } catch {
-      return false;
-    }
-  }, { message: 'Source_URL must be a valid http or https URL' });
+  .refine((url) => isValidHttpPublicUrl(url), {
+    message: 'Source_URL must be a valid public http or https URL',
+  });
 
-const DateSchema = z.string().trim().refine((dateStr) => {
-  if (!dateStr || dateStr === 'N/A') return false;
-  const d = new Date(dateStr);
-  return !isNaN(d.getTime());
-}, { message: 'Date must be a valid date (e.g. YYYY-MM-DD)' });
+const DateSchema = z
+  .string()
+  .trim()
+  .refine((dateStr) => isValidCalendarDate(dateStr), {
+    message: 'Date must be a valid calendar date in YYYY-MM-DD format',
+  });
 
 export const RawNewsItemSchema = z.object({
   Date: DateSchema,
@@ -88,11 +206,6 @@ export const RawNewsItemSchema = z.object({
   Sentiment_Explanation: z.string().trim().min(1, 'Sentiment Explanation is required'),
 });
 
-const FIELD_TO_CODE: Partial<Record<keyof NewsItem, string>> = {
-  Date: 'MISSING_DATE',
-  Source_URL: 'MISSING_SOURCE_URL',
-};
-
 function issueFromZodError(field: string, message: string, rawValue?: string): ValidationIssue {
   if (field === 'Source_URL') {
     const trimmed = (rawValue ?? '').trim();
@@ -104,10 +217,26 @@ function issueFromZodError(field: string, message: string, rawValue?: string): V
         rawValue,
       };
     }
+    try {
+      const parsed = new URL(trimmed);
+      if (
+        (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+        isPlaceholderHost(parsed.hostname)
+      ) {
+        return {
+          field,
+          code: 'PLACEHOLDER_URL',
+          message: `Source URL '${rawValue ?? ''}' uses a placeholder or local domain`,
+          rawValue,
+        };
+      }
+    } catch {
+      // Fall through to INVALID_URL_SCHEME
+    }
     return {
       field,
       code: 'INVALID_URL_SCHEME',
-      message: `Source URL '${rawValue ?? ''}' is not a valid HTTP/HTTPS URL`,
+      message: `Source URL '${rawValue ?? ''}' is not a valid public HTTP/HTTPS URL`,
       rawValue,
     };
   }
@@ -115,7 +244,7 @@ function issueFromZodError(field: string, message: string, rawValue?: string): V
     return {
       field,
       code: 'INVALID_DATE',
-      message: `Date '${rawValue ?? ''}' is not a valid date`,
+      message: `Date '${rawValue ?? ''}' is not a valid YYYY-MM-DD calendar date`,
       rawValue,
     };
   }
@@ -137,30 +266,35 @@ function issueFromZodError(field: string, message: string, rawValue?: string): V
   }
   return {
     field,
-    code: FIELD_TO_CODE[field as keyof NewsItem] ?? 'MISSING_REQUIRED_FIELD',
+    code: 'MISSING_REQUIRED_FIELD',
     message,
     rawValue,
   };
 }
 
 /**
- * Validates a single raw news item against the Zod schema and produces a
- * ValidatedNewsItem. Invalid rows are retained for traceability, not discarded.
+ * Validates a single raw news item against the Zod schema plus domain checks
+ * (calendar validity, non-future/date-range adherence, placeholder domains,
+ * and grounding source alignment). Invalid rows are retained for traceability.
  */
-export function validateNewsItem(raw: Record<string, any>, rowIndex: number): ValidatedNewsItem {
+export function validateNewsItem(
+  raw: Record<string, unknown>,
+  rowIndex: number,
+  context?: ValidationContext
+): ValidatedNewsItem {
   const item: NewsItem = {
-    Date: String(raw.Date ?? ''),
-    Time: String(raw.Time ?? ''),
-    Headline: String(raw.Headline ?? ''),
-    Short_Summary: String(raw.Short_Summary ?? ''),
-    Primary_Ticker_or_Entity: String(raw.Primary_Ticker_or_Entity ?? ''),
-    Region_or_Market: String(raw.Region_or_Market ?? ''),
-    Category: String(raw.Category ?? ''),
-    Source_Name: String(raw.Source_Name ?? ''),
-    Source_URL: String(raw.Source_URL ?? ''),
+    Date: String(raw.Date ?? '').trim(),
+    Time: String(raw.Time ?? '').trim(),
+    Headline: String(raw.Headline ?? '').trim(),
+    Short_Summary: String(raw.Short_Summary ?? '').trim(),
+    Primary_Ticker_or_Entity: String(raw.Primary_Ticker_or_Entity ?? '').trim(),
+    Region_or_Market: String(raw.Region_or_Market ?? '').trim(),
+    Category: String(raw.Category ?? '').trim(),
+    Source_Name: String(raw.Source_Name ?? '').trim(),
+    Source_URL: String(raw.Source_URL ?? '').trim(),
     Sentiment: String(raw.Sentiment ?? '').trim(),
     Impact: String(raw.Impact ?? '').trim(),
-    Sentiment_Explanation: String(raw.Sentiment_Explanation ?? ''),
+    Sentiment_Explanation: String(raw.Sentiment_Explanation ?? '').trim(),
   };
 
   const issues: ValidationIssue[] = [];
@@ -193,6 +327,56 @@ export function validateNewsItem(raw: Record<string, any>, rowIndex: number): Va
     }
   }
 
+  // Domain calendar checks when Date syntax passed
+  if (isValidCalendarDate(item.Date)) {
+    const maxAllowedDate =
+      context?.referenceDate && isValidCalendarDate(context.referenceDate)
+        ? context.referenceDate
+        : getDefaultMaxAllowedDate();
+
+    if (item.Date > maxAllowedDate) {
+      issues.push({
+        field: 'Date',
+        code: 'FUTURE_DATE',
+        message: `Date '${item.Date}' is in the future (after ${maxAllowedDate})`,
+        rawValue: item.Date,
+      });
+    }
+
+    const startBound =
+      context?.startDate && isValidCalendarDate(context.startDate)
+        ? context.startDate
+        : undefined;
+    const endBound =
+      context?.endDate && isValidCalendarDate(context.endDate)
+        ? context.endDate
+        : undefined;
+
+    if ((startBound && item.Date < startBound) || (endBound && item.Date > endBound)) {
+      issues.push({
+        field: 'Date',
+        code: 'DATE_OUT_OF_RANGE',
+        message: `Date '${item.Date}' falls outside the requested range (${startBound || 'earliest'} to ${endBound || 'now'})`,
+        rawValue: item.Date,
+      });
+    }
+  }
+
+  // Grounding source corroboration check when Source_URL syntax passed
+  if (
+    context?.groundingSources &&
+    context.groundingSources.length > 0 &&
+    isValidHttpPublicUrl(item.Source_URL) &&
+    !isUrlGrounded(item.Source_URL, context.groundingSources)
+  ) {
+    issues.push({
+      field: 'Source_URL',
+      code: 'UNGROUNDED_SOURCE',
+      message: `Source URL '${item.Source_URL}' does not match any returned grounding search source`,
+      rawValue: item.Source_URL,
+    });
+  }
+
   // Unexpected extra columns from the model output
   const expectedKeys = new Set(Object.keys(item));
   const unexpectedKeys = Object.keys(raw).filter((k) => !expectedKeys.has(k));
@@ -213,11 +397,15 @@ export function validateNewsItem(raw: Record<string, any>, rowIndex: number): Va
     Impact: normalizedImpact || item.Impact,
   };
 
-  const id = `row-${rowIndex}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const uniquePart =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).substring(2, 10);
+  const id = `row-${rowIndex}-${Date.now().toString(36)}-${uniquePart}`;
 
   return {
     id,
-    raw: { ...item },
+    raw: { ...raw },
     data: normalizedItem,
     verificationStatus: isVerified ? 'Verified' : 'Needs review',
     validationIssues: issues,
@@ -230,10 +418,11 @@ export function validateNewsItem(raw: Record<string, any>, rowIndex: number): Va
  * validation summary.
  */
 export function validateResearchResults(
-  rows: Record<string, any>[],
-  csvParseErrors: string[] = []
+  rows: Record<string, unknown>[],
+  csvParseErrors: string[] = [],
+  context?: ValidationContext
 ): { items: ValidatedNewsItem[]; summary: ValidationSummary } {
-  const items = rows.map((row, idx) => validateNewsItem(row, idx));
+  const items = rows.map((row, idx) => validateNewsItem(row, idx, context));
   const verifiedCount = items.filter((i) => i.isVerified).length;
 
   const summary: ValidationSummary = {

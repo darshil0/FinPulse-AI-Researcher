@@ -4,6 +4,7 @@ import {
   migrateLegacyLocalStorage,
   getAllResearchRuns,
   saveResearchRun,
+  clearAllResearchRuns,
   StoredResearchRun,
 } from '../lib/storage/db';
 
@@ -12,7 +13,7 @@ describe('IndexedDB Storage and Migration', () => {
     localStorage.clear();
   });
 
-  it('migrates legacy localStorage items once without duplicating records', async () => {
+  it('migrates legacy localStorage items once without fabricating Verified status', async () => {
     const legacyHistory = [
       {
         id: 'legacy-1',
@@ -24,27 +25,37 @@ describe('IndexedDB Storage and Migration', () => {
 
     localStorage.setItem('finpulse_history', JSON.stringify(legacyHistory));
 
-    // First migration
     await migrateLegacyLocalStorage();
     expect(localStorage.getItem('finpulse_migrated_v1')).toBe('true');
 
-    // Fetch runs from DB
     const runs = await getAllResearchRuns();
-    expect(runs.some((r) => r.id === 'legacy-1')).toBe(true);
+    const migrated = runs.find((r) => r.id === 'legacy-1');
+    expect(migrated).toBeDefined();
+    expect(migrated?.status).toBe('partial_success');
+    expect(migrated?.summary.verifiedRows).toBe(0);
+    expect(migrated?.summary.needsReviewRows).toBe(5);
 
-    // Second migration call should not duplicate
     await migrateLegacyLocalStorage();
     const runsAfter = await getAllResearchRuns();
     expect(runsAfter.filter((r) => r.id === 'legacy-1')).toHaveLength(1);
   });
 
-  it('handles malformed legacy localStorage gracefully without crashing', async () => {
+  it('handles malformed legacy localStorage gracefully and marks corrupt migration handled once', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     localStorage.setItem('finpulse_history', 'INVALID_JSON{{{');
 
     await expect(migrateLegacyLocalStorage()).resolves.not.toThrow();
+    expect(localStorage.getItem('finpulse_migrated_v1')).toBe('corrupt');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    // Second invocation does not keep re-warning
+    await migrateLegacyLocalStorage();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
   });
 
-  it('saves and reads research runs properly in IndexedDB', async () => {
+  it('saves, reads, and clears research runs and localStorage fallback keys', async () => {
+    localStorage.setItem('finpulse_runs_fallback', JSON.stringify([{ id: 'fb-1' }]));
     const run: StoredResearchRun = {
       id: 'run-test-123',
       query: 'Semiconductor market analysis',
@@ -66,5 +77,10 @@ describe('IndexedDB Storage and Migration', () => {
     await saveResearchRun(run);
     const runs = await getAllResearchRuns();
     expect(runs.some((r) => r.id === 'run-test-123')).toBe(true);
+
+    await clearAllResearchRuns();
+    expect(localStorage.getItem('finpulse_runs_fallback')).toBeNull();
+    const runsAfterClear = await getAllResearchRuns();
+    expect(runsAfterClear).toHaveLength(0);
   });
 });

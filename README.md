@@ -24,15 +24,15 @@ FinPulse AI Researcher is an institutional-grade financial news research, valida
 
 ## Key Features
 
-- **Server-Side Gemini Proxy**: Routes all AI queries through the `gemini-research` Supabase Edge Function (`supabase/functions/gemini-research/index.ts`), keeping `GEMINI_API_KEY` strictly on the server with input validation and exponential backoff retries.
-- **Live & Historical Date-Range Queries**: Supports real-time queries (defaulting to the last 24 hours) as well as historical `startDate`/`endDate` ranges (`YYYY-MM-DD`), with client-side `INVALID_DATE_RANGE` checks and a **Cancel Research** button powered by `AbortController`.
-- **Strict Runtime Zod Validation**: Validates all 12 CSV fields using `RawNewsItemSchema`, `DateSchema`, `UrlSchema`, `SENTIMENT_ENUM`, and `IMPACT_ENUM`, preserving invalid rows for auditability rather than silently dropping them.
+- **Server-Side Gemini Proxy**: Routes all AI queries through the `gemini-research` Supabase Edge Function (`supabase/functions/gemini-research/index.ts`), keeping `GEMINI_API_KEY` strictly on the server with input/date-order validation, UTC reference timestamps, and exponential backoff retries.
+- **Live & Historical Date-Range Queries**: Supports real-time queries (defaulting to the last 24 hours UTC) as well as historical `startDate`/`endDate` ranges (`YYYY-MM-DD`), with `INVALID_DATE_RANGE` validation (rejecting future start dates or `startDate > endDate`), a **Cancel Research** button powered by `AbortController`, a `45s` `REQUEST_TIMEOUT`, and frozen per-run query/date provenance.
+- **Strict Runtime Zod & Domain Verification**: Validates all 12 CSV fields using `RawNewsItemSchema`, strict `YYYY-MM-DD` calendar validation (rejecting rollovers like `2026-02-30`), non-future and query-range date checks (`FUTURE_DATE`, `DATE_OUT_OF_RANGE`), placeholder/local domain blocking (`PLACEHOLDER_URL`), and `Source_URL` corroboration against returned `groundingSources` (`UNGROUNDED_SOURCE`), retaining unmodified `raw` rows for auditability.
 - **Interactive Data Grid & Visual Analytics**:
-  - `NewsTable` offers column sorting across 6 fields, keyword/ticker filtering, verification status tabs (`All Rows`, `Verified Only`, `Needs Review`), expandable row diagnostics (`Sentiment_Explanation` and validation errors), and safe external source links (`http`-prefixed URLs).
-  - `AnalyticsDashboard` renders Recharts Sentiment Breakdown and Market Impact pie charts (colors mapped by label name) alongside a Top Categories bar chart.
-- **End-to-End Traceability Audit Chain**: `TraceabilityPanel` exposes query parameters, model metadata, grounding search sources, validation metrics, persisted run state, row-level raw JSON payloads, raw LLM text, and clipboard copy tools.
-- **IndexedDB Persistence with Fallback**: Stores up to `200` research runs (`MAX_STORED_RUNS`) in IndexedDB (`finpulse_db`) via `idb` with automatic `localStorage` fallback, one-time legacy history migration (`finpulse_history`), single-entry deletion, and full history clearing.
-- **Formula-Safe CSV & Native XLSX Exports**: Neutralizes spreadsheet formula injection via a shared `sanitizeCell` helper across both CSV and multi-sheet `.xlsx` exports.
+  - `NewsTable` offers semantic `Impact` (`High > Medium > Low`) and chronological `Date`/`Time` sorting with `aria-sort`, keyword/ticker filtering, verification status tabs (`All Rows`, `Verified Only`, `Needs Review`), accessible expandable row diagnostics (`Sentiment_Explanation` and validation errors), and safe external source links (`http`/`https` URLs).
+  - `AnalyticsDashboard` includes an **All Rows / Verified Only** toggle, Recharts Sentiment Breakdown and Market Impact pie charts (colors mapped by label name), and a Top Categories bar chart capped at `7` categories plus an `Other` rollup.
+- **End-to-End Traceability Audit Chain**: Accessible across `success`, `partial_success`, `no_results`, and `unparseable_model_output` runs; `TraceabilityPanel` exposes frozen query parameters, model metadata, `http`/`https`-filtered grounding search sources, validation metrics, accurate persistence status (`Saved locally (IndexedDB)` vs `Not saved`), row-level raw JSON payloads, raw LLM text, and full JSON audit export.
+- **IndexedDB Persistence with Fallback**: Stores up to `200` valid research runs (`MAX_STORED_RUNS`) in IndexedDB (`finpulse_db`) via `idb` (skipping `network_error` and `INVALID_DATE_RANGE` failures) with automatic `localStorage` fallback, one-time legacy history migration (`finpulse_history`), single-entry deletion, and resilient full history clearing.
+- **Filter-Synced, Formula-Safe CSV & Native XLSX Exports**: Respects active table keyword/status filters and an **Include Needs Review** toggle, shares a unified column order across CSV and `.xlsx`, prepends a UTF-8 BOM (`\uFEFF`) for Excel character compatibility, and neutralizes spreadsheet formula injection via `sanitizeCell`.
 
 ---
 
@@ -62,10 +62,10 @@ FinPulse AI Researcher is an institutional-grade financial news research, valida
 
 The client bundle **never** embeds or accesses `GEMINI_API_KEY` (`vite.config.ts` does not inject the key via `define` or `VITE_*` variables). All AI calls cross a strict server-side boundary:
 
-1. **Client (`src/services/geminiService.ts`)**: Reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` dynamically (returning `PROVIDER_ERROR` if unset) and applies client-side rate limiting (`enforceClientRateLimit`, enforcing a `2,000 ms` minimum delay between consecutive requests and a `10`-requests-per-`60s` sliding-window cap that yields `RATE_LIMITED` if exceeded) before sending `POST ${VITE_SUPABASE_URL}/functions/v1/gemini-research` with `{ query, startDate, endDate }`, `Authorization: Bearer ${VITE_SUPABASE_ANON_KEY}`, and an `AbortSignal`.
-2. **Backend (`supabase/functions/gemini-research/index.ts`)**: Validates the request (`query` <= 2,000 characters, `startDate`/`endDate` matching `YYYY-MM-DD`) and reads `GEMINI_API_KEY` solely from server secrets (`Deno.env.get("GEMINI_API_KEY")`).
+1. **Client (`src/services/geminiService.ts`)**: Reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` dynamically (returning `PROVIDER_ERROR` if unset) and applies client-side rate limiting (`enforceClientRateLimit`, enforcing a `2,000 ms` minimum delay between consecutive requests and a `10`-requests-per-`60s` sliding-window cap that yields `RATE_LIMITED` if exceeded) before sending `POST ${VITE_SUPABASE_URL}/functions/v1/gemini-research` with `{ query, startDate, endDate }`, `Authorization: Bearer ${VITE_SUPABASE_ANON_KEY}`, and a `45,000 ms` timeout-wrapped `AbortSignal`.
+2. **Backend (`supabase/functions/gemini-research/index.ts`)**: Validates the request (`query` <= 2,000 characters, `startDate`/`endDate` matching `YYYY-MM-DD`, `startDate <= endDate`), injects the current UTC ISO timestamp and `todayUtc` into the prompt, and reads `GEMINI_API_KEY` solely from server secrets (`Deno.env.get("GEMINI_API_KEY")`).
 3. **Gemini API & Retries**: Calls `gemini-3-flash-preview` with `x-goog-api-key` and `googleSearch` grounding, making up to `3` total attempts (`MAX_RETRIES = 3`) on `429` and `5xx` responses with exponential backoff (`1s`, `2s`, capped at `10s`) before returning `{ rawText, groundingSources, modelName }`.
-4. **Client Parsing & Run Status**: Maps HTTP `429` to `RATE_LIMITED`, other HTTP/network errors to `NETWORK_FAILURE`, and malformed JSON to `INVALID_RESPONSE_STRUCTURE`; strips markdown fences if present, parses the CSV payload with PapaParse, validates rows with Zod, and classifies the run into `success`, `partial_success`, `no_results`, `unparseable_model_output`, or `network_error`.
+4. **Client Parsing & Run Status**: Maps HTTP `429` to `RATE_LIMITED`, timeouts to `REQUEST_TIMEOUT`, other HTTP/network errors to `NETWORK_FAILURE`, and malformed JSON to `INVALID_RESPONSE_STRUCTURE`; requires a true `Date,Time,Headline` CSV header (classifying prose responses without CSV structure as `unparseable_model_output`), strips trailing `Note:`/`Disclaimer:`/`Sources:` lines into `parseErrors`, validates rows against Zod and `ValidationContext`, and classifies the run into `success`, `partial_success`, `no_results`, `unparseable_model_output`, or `network_error`.
 
 ---
 
@@ -75,20 +75,20 @@ FinPulse enforces a strict runtime validation boundary in `src/lib/validation/in
 
 ### Zod Validation Schemas
 
-Before schema parsing, `validateNewsItem` extracts all 12 expected fields as strings and applies case-insensitive normalization to `Sentiment` and `Impact` (e.g., `"positive"` → `"Positive"`, `"high"` → `"High"`). The normalized candidate object is then evaluated with `RawNewsItemSchema.safeParse(...)`, composed of:
+Before schema parsing, `validateNewsItem` preserves the unmodified parsed input row in `raw`, extracts all 12 expected fields as trimmed strings for validation, and applies case-insensitive normalization to `Sentiment` and `Impact` (e.g., `"positive"` → `"Positive"`, `"high"` → `"High"`). The normalized candidate object is evaluated with `RawNewsItemSchema.safeParse(...)` plus domain verification rules using `ValidationContext` (`startDate`, `endDate`, `groundingSources`, `referenceDate`):
 
-- **`DateSchema`**: `z.string().trim().refine(...)` — rejects empty values and `"N/A"`, requiring a valid calendar date string parseable by `new Date(...)` (e.g., `YYYY-MM-DD`). Failures emit `INVALID_DATE`.
-- **`UrlSchema`**: `z.string().trim().refine(...)` — rejects empty values and `"N/A"` (`MISSING_SOURCE_URL`), parses the value via `new URL(...)`, and permits only `http:` or `https:` protocols (`INVALID_URL_SCHEME`).
+- **`DateSchema` & Calendar/Range Checks**: Requires a strict `YYYY-MM-DD` real calendar date (`isValidCalendarDate`, rejecting invalid rollovers like `2026-02-30`) → `INVALID_DATE`. Domain rules further emit `FUTURE_DATE` when `Date` exceeds the current date (`referenceDate`) and `DATE_OUT_OF_RANGE` when outside the requested `startDate`..`endDate` bounds.
+- **`UrlSchema` & Domain/Grounding Checks**: `isValidHttpPublicUrl` requires a valid `http:` or `https:` URL with a dot-containing public hostname, emitting `MISSING_SOURCE_URL` for `""`/`"N/A"`, `PLACEHOLDER_URL` for local/reserved hosts (`localhost`, `127.0.0.1`, `example.com`, `.local`, `.invalid`, etc.), and `INVALID_URL_SCHEME` for other invalid URLs or disallowed schemes (`javascript:`, `data:`). When `groundingSources` are provided, `isUrlGrounded` emits `UNGROUNDED_SOURCE` if `Source_URL` does not match any returned grounding domain or title.
 - **`RawNewsItemSchema`**: `z.object(...)` requiring:
   - `Date` (`DateSchema`) and `Source_URL` (`UrlSchema`)
   - Non-empty trimmed strings (`z.string().trim().min(1)`) for `Time`, `Headline`, `Short_Summary`, `Primary_Ticker_or_Entity`, `Region_or_Market`, `Category`, `Source_Name`, and `Sentiment_Explanation` (`MISSING_REQUIRED_FIELD`)
   - `Sentiment` matching `SENTIMENT_ENUM` (`Positive`, `Negative`, `Neutral` → `INVALID_SENTIMENT`)
   - `Impact` matching `IMPACT_ENUM` (`High`, `Medium`, `Low` → `INVALID_IMPACT`)
-- **Unexpected Column Detection**: Any parsed keys outside the 12 schema fields append an `UNEXPECTED_COLUMNS` `ValidationIssue`.
+- **Unexpected Column Detection**: Any keys in `raw` outside the 12 schema fields remain preserved in `raw` and append an `UNEXPECTED_COLUMNS` `ValidationIssue`.
 
 | Column | Rule / Schema | Failure Issue Code |
 | :--- | :--- | :--- |
-| `Date` | `DateSchema`: trimmed non-empty string (not `"N/A"`) parsing to a valid `Date` (e.g., `YYYY-MM-DD`) | `INVALID_DATE` |
+| `Date` | `DateSchema`: strict `YYYY-MM-DD` real calendar date + non-future + requested range check | `INVALID_DATE` / `FUTURE_DATE` / `DATE_OUT_OF_RANGE` |
 | `Time` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
 | `Headline` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
 | `Short_Summary` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
@@ -96,7 +96,7 @@ Before schema parsing, `validateNewsItem` extracts all 12 expected fields as str
 | `Region_or_Market` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
 | `Category` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
 | `Source_Name` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
-| `Source_URL` | `UrlSchema`: non-empty (not `"N/A"`) valid `http:` or `https:` URL | `MISSING_SOURCE_URL` / `INVALID_URL_SCHEME` |
+| `Source_URL` | `UrlSchema`: public `http:`/`https:` URL (non-placeholder) + grounding match when sources exist | `MISSING_SOURCE_URL` / `PLACEHOLDER_URL` / `INVALID_URL_SCHEME` / `UNGROUNDED_SOURCE` |
 | `Sentiment` | `SENTIMENT_ENUM` (`Positive`, `Negative`, `Neutral`, case-insensitive normalization) | `INVALID_SENTIMENT` |
 | `Impact` | `IMPACT_ENUM` (`High`, `Medium`, `Low`, case-insensitive normalization) | `INVALID_IMPACT` |
 | `Sentiment_Explanation` | Trimmed non-empty string | `MISSING_REQUIRED_FIELD` |
@@ -108,15 +108,15 @@ Every parsed row is wrapped in a `ValidatedNewsItem` record alongside a run-leve
 ```ts
 interface ValidationIssue {
   field: string;      // Column name or 'Row' for extra columns
-  code: string;       // e.g., MISSING_REQUIRED_FIELD, MISSING_SOURCE_URL, INVALID_URL_SCHEME
+  code: string;       // e.g., MISSING_REQUIRED_FIELD, PLACEHOLDER_URL, UNGROUNDED_SOURCE
   message: string;    // Human-readable diagnostic
   rawValue?: string;  // Exact value returned by the model
 }
 
 interface ValidatedNewsItem {
   id: string;
-  raw: NewsItem;                                  // Original extracted strings (trimmed for Sentiment/Impact)
-  data: NewsItem;                                 // Output row with normalized Sentiment & Impact casing
+  raw: Record<string, unknown>;                   // Unmodified parsed row object (including extra columns)
+  data: NewsItem;                                 // Trimmed output row with normalized Sentiment & Impact
   verificationStatus: 'Verified' | 'Needs review'; // Displayed as "Needs Review" in UI filter tabs
   validationIssues: ValidationIssue[];
   isVerified: boolean;
@@ -172,12 +172,14 @@ interface ValidationSummary {
 
 ## Export & Security Protections
 
-- **Formula Injection Neutralization (`src/lib/export/excel.ts`)**: Both `exportToCSV` and `exportToXLSX` pass cell strings through the shared `sanitizeCell` helper, which prefixes any value starting with `=`, `+`, `-`, `@`, `\t` (tab), or `\r` (carriage return) with a leading single quote (`'`).
-- **Native Multi-Sheet XLSX Workbooks**: Generated via SheetJS (`xlsx`) with two worksheets:
-  - `Research Results`: Exported rows with auto-filters, frozen header row, and sized columns.
-  - `Traceability`: Run query, date range, run status, model name, row counts, grounding sources, and detailed validation issues for included rows (all dynamic strings sanitized via `sanitizeCell`).
-- **CSV Resource Cleanup**: `exportToCSV` revokes temporary blob URLs immediately via `URL.revokeObjectURL` after triggering the download.
-- **Safe Source Links**: `NewsTable` only renders clickable external links for `http`/`https` URLs (`rel="noopener noreferrer"`).
+See [SECURITY.md](./SECURITY.md) for the complete security architecture, `xlsx@0.18.5` write-only advisory posture, and recommended HTTP Content Security Policy headers.
+
+- **Formula Injection Neutralization (`src/lib/export/excel.ts`)**: Both `exportToCSV` and `exportToXLSX` format rows via a shared `formatExportRow` column layout and pass dynamic values through `sanitizeCell`, prefixing any value starting with `=`, `+`, `-`, `@`, `\t` (tab), or `\r` (carriage return) with a leading single quote (`'`).
+- **Filter-Synchronized & Encoded Exports**: Exports operate on the currently filtered table view (keyword search + status tab) and honor the UI **Include Needs Review** toggle (`includeNeedsReview`). CSV blobs prepend a UTF-8 BOM (`\uFEFF`) so Excel preserves currency symbols and international characters, and temporary blob URLs are revoked immediately via `URL.revokeObjectURL`.
+- **Native Multi-Sheet XLSX Workbooks**: Generated via SheetJS (`xlsx`) in write-only mode with two worksheets:
+  - `Research Results`: Exported rows with auto-filters and sized columns.
+  - `Traceability`: Frozen run query, date range, run status, model name, row counts, grounding sources, and detailed validation issues for included rows (all dynamic strings sanitized via `sanitizeCell`).
+- **Safe Source Links**: `NewsTable` and `TraceabilityPanel` only render clickable external links for `http`/`https` URLs (`rel="noopener noreferrer"`).
 
 ---
 
@@ -194,23 +196,23 @@ interface ValidationSummary {
 ## Project Structure
 
 ```text
-├── .github/workflows/ci.yml              # GitHub Actions CI (lint, test, build on Node 22)
+├── .github/workflows/ci.yml              # GitHub Actions CI (audit, lint, test, build on Node 22)
 ├── supabase/
 │   ├── config.toml                       # Edge Function config (verify_jwt = false)
 │   └── functions/gemini-research/
 │       └── index.ts                      # Server-side Gemini proxy & retry handler
 ├── src/
 │   ├── components/
-│   │   ├── AnalyticsDashboard.tsx        # Sentiment, Impact & Category Recharts views
+│   │   ├── AnalyticsDashboard.tsx        # Verified toggle & Sentiment/Impact/Category charts
 │   │   ├── NewsTable.tsx                 # Sortable/filterable grid & row diagnostics
 │   │   └── TraceabilityPanel.tsx         # 4-step pipeline & audit provenance drawer
 │   ├── lib/
-│   │   ├── export/excel.ts               # Shared sanitizeCell, CSV & XLSX exporters
+│   │   ├── export/excel.ts               # Shared sanitizeCell, UTF-8 BOM CSV & XLSX exporters
 │   │   ├── storage/db.ts                 # IndexedDB persistence + localStorage fallback
 │   │   ├── utils.ts                      # Tailwind class-merge utility (cn)
-│   │   └── validation/                   # Zod schemas, validation logic & edge-case tests (12)
-│   ├── services/geminiService.ts         # Rate-limited Edge Function client & CSV parser
-│   ├── test/                             # Vitest suites (components, db, export, geminiService, validation)
+│   │   └── validation/                   # Zod/domain schemas & edge-case tests (14)
+│   ├── services/geminiService.ts         # Rate-limited, timeout-guarded Edge Function client
+│   ├── test/                             # Vitest suites (app, components, db, export, geminiService, validation)
 │   ├── tests/export.test.ts              # Formula-injection sanitizer tests (=HYPERLINK, +, -, @)
 │   ├── App.tsx                           # Main application UI & state orchestration
 │   ├── index.css                         # Tailwind CSS entrypoint & base styling
@@ -223,7 +225,8 @@ interface ValidationSummary {
 ├── LICENSE                               # Apache-2.0 license text
 ├── metadata.json                         # Applet manifest and server-side Gemini capability
 ├── package.json                          # Dependencies and npm scripts
-├── tsconfig.json                         # TypeScript config (excludes supabase/, dist/, node_modules/)
+├── SECURITY.md                           # Security posture, secret boundary & CSP guidance
+├── tsconfig.json                         # Strict TypeScript config (strict: true; excludes supabase/, dist/, node_modules/)
 ├── vite.config.ts                        # Vite dev/build configuration
 └── vitest.config.ts                      # Vitest + jsdom test configuration
 ```
@@ -282,10 +285,13 @@ npm install
 # Start the Vite development server on port 3000
 npm run dev
 
-# Run TypeScript type checking (tsc --noEmit)
+# Check dependency advisories (critical threshold)
+npm audit --audit-level=critical
+
+# Run strict TypeScript type checking (tsc --noEmit)
 npm run lint
 
-# Run the Vitest unit test suite (45 tests across 7 files)
+# Run the Vitest unit test suite (55 tests across 8 files)
 npm test
 
 # Build the production bundle into dist/
@@ -302,12 +308,13 @@ npm run clean
 
 ## Continuous Integration
 
-The workflow in `.github/workflows/ci.yml` runs on `ubuntu-latest` with **Node.js 22** (and supports manual `workflow_dispatch`, job timeouts, and concurrency cancellation) on pushes and pull requests to `main` and `master`, executing:
+The workflow in `.github/workflows/ci.yml` runs on `ubuntu-latest` with **Node.js 22** (using `actions/checkout@v6` and `actions/setup-node@v6`, with manual `workflow_dispatch`, job timeouts, and concurrency cancellation) on pushes and pull requests to `main` and `master`, executing:
 
 1. `npm ci`
-2. `npm run lint` (`tsc --noEmit`)
-3. `npm test` (`vitest run`)
-4. `npm run build` (`vite build`)
+2. `npm audit --audit-level=critical`
+3. `npm run lint` (`tsc --noEmit`)
+4. `npm test` (`vitest run`)
+5. `npm run build` (`vite build`)
 
 ---
 

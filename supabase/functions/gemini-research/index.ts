@@ -51,8 +51,8 @@ Never fabricate URLs, outlet names, company tickers, or publication dates.
 
 5. Target schema for the final CSV
 Exactly these columns, in this order:
-1. Date (YYYY-MM-DD)
-2. Time (HH:MM or N/A)
+1. Date (YYYY-MM-DD, UTC, must not be in the future)
+2. Time (HH:MM in 24-hour UTC or N/A)
 3. Headline (≤ 150 characters)
 4. Short_Summary (Exactly one sentence, ~40–50 words)
 5. Primary_Ticker_or_Entity
@@ -142,14 +142,24 @@ Deno.serve(async (req: Request) => {
         );
       }
     }
+    if (startDate && endDate && startDate > endDate) {
+      return new Response(
+        JSON.stringify({ error: "startDate cannot be after endDate." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
-    let prompt = query;
+    const now = new Date();
+    const nowUtcIso = now.toISOString();
+    const todayUtc = nowUtcIso.split("T")[0];
+
+    let prompt = `${query}\n\nCurrent reference UTC timestamp: ${nowUtcIso} (today: ${todayUtc}).`;
     if (startDate || endDate) {
-      prompt += `\n\nPlease restrict findings to news published between ${
+      prompt += `\nPlease restrict findings to news published between ${
         startDate || "the earliest available date"
-      } and ${endDate || "now"}.`;
+      } and ${endDate || todayUtc}. Do not return items dated after ${todayUtc}.`;
     } else {
-      prompt += `\n\nPlease restrict findings to news published in the last 24 hours.`;
+      prompt += `\nPlease restrict findings to news published in the last 24 hours relative to ${nowUtcIso}.`;
     }
 
     let lastStatus = 0;

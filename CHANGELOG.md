@@ -2,35 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.5.0] - 2026-11-26
+## [1.5.0] - 2026-11-27
 
 ### Security
-- **Server-Side Supabase Edge Function Proxy**: Moved Gemini API calls and `GEMINI_API_KEY` into `supabase/functions/gemini-research/index.ts` (Deno) with request validation (`query` length and `YYYY-MM-DD` date checks), calling `/functions/v1/gemini-research` from `src/services/geminiService.ts`.
-- **CSV & XLSX Formula Injection Neutralization**: Exported and applied a shared `sanitizeCell` helper in `src/lib/export/excel.ts` to prefix cell values starting with `=`, `+`, `-`, `@`, `\t` (tab), or `\r` (carriage return) with `'` across both CSV exports and XLSX worksheets (`Research Results` and `Traceability`), and restricted clickable source links in `NewsTable` to `http`-prefixed URLs.
+- **Server-Side Supabase Edge Function Proxy**: Moved Gemini API calls and `GEMINI_API_KEY` into `supabase/functions/gemini-research/index.ts` (Deno) with request validation (`query` length, `YYYY-MM-DD` syntax, `startDate <= endDate`) and UTC reference timestamps, calling `/functions/v1/gemini-research` from `src/services/geminiService.ts`.
+- **Removed Unused Client SDK & Added Missing Type Definitions**: Removed unused `@google/genai` (eliminating its transitive critical `protobufjs` advisory) and `autoprefixer`, installed `@types/react`, `@types/react-dom`, and `@types/papaparse`, enabled `"strict": true` in `tsconfig.json`, added `SECURITY.md`, and added `npm audit --audit-level=critical` to `.github/workflows/ci.yml`.
+- **CSV & XLSX Formula Injection Neutralization & Encoding**: Exported and applied a shared `sanitizeCell` helper in `src/lib/export/excel.ts` across unified CSV and XLSX (`Research Results` and `Traceability`) column layouts, prepended a UTF-8 BOM (`\uFEFF`) to CSV downloads, and restricted clickable external links in `NewsTable` and `TraceabilityPanel` to `http:`/`https:` URLs.
 
 ### Added
-- **Client-Side Request Rate Limiting**: Added `enforceClientRateLimit` and `THROTTLE_CONFIG` in `src/services/geminiService.ts` enforcing a minimum `2,000 ms` interval between consecutive backend requests and a `10`-requests-per-`60s` sliding-window limit with `AbortSignal`-aware cancellation.
-- **In-Flight Request Cancellation**: Wired an `AbortController` and **Cancel Research** button in `src/App.tsx` passing `AbortSignal` through `researchFinancialNews`.
-- **Individual History Entry Deletion**: Added `deleteResearchRun` support in `src/lib/storage/db.ts` and per-entry delete actions in the History panel (`src/App.tsx`).
-- **Typed Error Codes & Date Validation**: Added `ResearchErrorCode` (`INVALID_DATE_RANGE`, `RATE_LIMITED`, `NETWORK_FAILURE`, `PROVIDER_ERROR`, `UNPARSEABLE_OUTPUT`, `INVALID_RESPONSE_STRUCTURE`, etc.) and Vite environment typings (`src/vite-env.d.ts`).
+- **Client-Side Request Rate Limiting & Request Timeout**: Added `enforceClientRateLimit`, `THROTTLE_CONFIG` (`2,000 ms` minimum spacing, `10` requests per `60s` sliding window), and a `45,000 ms` `AbortController` `REQUEST_TIMEOUT` guard in `src/services/geminiService.ts`.
+- **In-Flight Request Cancellation & Concurrency Guard**: Wired an `AbortController` (**Cancel Research** button), `isLoading` locks on presets/history/retry, and a sequence counter (`requestSeqRef`) in `src/App.tsx` to prevent stale out-of-order updates.
+- **Analytics Scope Toggle & Category Cap**: Added an **All Rows / Verified Only** toggle (`aria-pressed`) with empty-state fallback and a `MAX_CATEGORIES = 7` + `'Other'` rollup in `src/components/AnalyticsDashboard.tsx`.
+- **Individual History Entry Deletion & Export Scope Toggle**: Added `deleteResearchRun` controls in the History panel (`src/App.tsx`) and an **Include Needs Review** export checkbox synchronized with active keyword/status filters.
+- **Typed Error Codes & Strict Domain Validation**: Added `ResearchErrorCode` (`INVALID_DATE_RANGE`, `RATE_LIMITED`, `NETWORK_FAILURE`, `REQUEST_TIMEOUT`, `PROVIDER_ERROR`, `UNPARSEABLE_OUTPUT`, `INVALID_RESPONSE_STRUCTURE`), `ValidationContext` (`FUTURE_DATE`, `DATE_OUT_OF_RANGE`, `PLACEHOLDER_URL`, `UNGROUNDED_SOURCE`), and `src/vite-env.d.ts`.
 
 ### Changed
-- **Zod Schema Consolidation**: Updated `validateNewsItem` in `src/lib/validation/index.ts` to validate against `RawNewsItemSchema`, `DateSchema`, and `UrlSchema` with case-insensitive `Sentiment`/`Impact` normalization, required `Time` and `Sentiment_Explanation` fields, and `MISSING_SOURCE_URL` vs. `INVALID_URL_SCHEME` error codes.
-- **Unified Storage Cap**: Aligned IndexedDB pruning and `localStorage` fallback eviction under a shared `MAX_STORED_RUNS = 200` constant in `src/lib/storage/db.ts`.
-- **Export Object URL Cleanup**: Added `URL.revokeObjectURL(url)` cleanup in `exportToCSV` (`src/lib/export/excel.ts`).
-- **Expanded Test Coverage (45 Tests Across 7 Suites)**:
-  - `src/lib/validation/validation.test.ts` (12 tests): Edge-case coverage for `validateNewsItem`, `validateResearchResults`, `RawNewsItemSchema`, missing/null `Time` and `Sentiment_Explanation`, invalid dates, unsafe URL schemes, unexpected columns, and raw-vs-normalized enums.
-  - `src/tests/export.test.ts` (5 tests) & `src/test/export.test.ts` (4 tests): Formula-injection sanitization tests (`=HYPERLINK`, `=`, `+`, `-`, `@`, `\t`, `\r`) across CSV and XLSX exports plus `URL.revokeObjectURL` cleanup.
-  - `src/test/geminiService.test.ts` (10 tests): Supabase proxy calls, HTTP 429/401 handling, unparseable output, `partial_success` classification, client-side interval/burst throttling, and `AbortSignal` cancellation.
-  - `src/test/validation.test.ts` (8 tests), `src/test/db.test.ts` (3 tests), and `src/test/components.test.tsx` (3 tests).
-- **Documentation & Metadata Alignment**: Updated `README.md` (server-side Gemini proxy architecture, required env vars & Edge Function deployment, Data Integrity Zod schemas, `Verified` vs. `Needs review` structure, and accurate test/CI counts), `CHANGELOG.md`, `.env.example`, `.bolt/memory.md` (resolved architecture and testing state), and `index.html` (removed legacy `bolt.new` OpenGraph/Twitter image URLs and synced metadata with `metadata.json`).
-- **TypeScript Configuration**: Excluded `supabase`, `dist`, and `node_modules` from the browser `tsconfig.json` check so `npm run lint` (`tsc --noEmit`) validates client and test code cleanly.
+- **Zod & Domain Verification Boundary**: Updated `validateNewsItem` in `src/lib/validation/index.ts` to preserve unmodified `raw` row objects (including extra columns), enforce real `YYYY-MM-DD` calendar dates (`isValidCalendarDate`), block placeholder/local domains (`isPlaceholderHost`), verify `Source_URL` against `groundingSources` (`isUrlGrounded`), normalize `Sentiment`/`Impact` case-insensitively, require `Time` and `Sentiment_Explanation`, and quarantine invalid rows as `Needs review`.
+- **Storage Reliability & Honest Legacy Migration**: Aligned IndexedDB pruning and `localStorage` fallback under `MAX_STORED_RUNS = 200`, reset rejected `dbPromise` handles, added `blocking`/`terminated` lifecycle handlers, ensured `clearAllResearchRuns()` always clears `localStorage`, stopped fabricating `success`/`verifiedRows` on legacy migrations, and logged corrupt legacy JSON once.
+- **Accessibility & UI Provenance**: Froze `query`/`startDate`/`endDate` provenance on completed `ResearchResult` objects, added `<button>` sort controls with `aria-sort` in `NewsTable` and keyboard row toggles (`aria-expanded`), rendered `TraceabilityPanel` in `unparseable_model_output` and `no_results` states with accurate `persistenceState`, shortened run IDs cleanly, and replaced all underscores in status labels.
+- **Expanded Test Coverage (55 Tests Across 8 Suites)**:
+  - `src/lib/validation/validation.test.ts` (14 tests): Calendar rollover rejection, future/out-of-range dates, placeholder/local URLs, grounding domain/title alignment, raw extra-column retention, and required fields.
+  - `src/test/geminiService.test.ts` (13 tests): Supabase proxy calls, HTTP 429/401 handling, strict CSV header detection, trailing commentary stripping, `REQUEST_TIMEOUT`, interval/burst throttling, and `AbortSignal` cancellation.
+  - `src/test/validation.test.ts` (8 tests): Core schema normalization, `MISSING_SOURCE_URL`, `INVALID_URL_SCHEME`, and unexpected column checks.
+  - `src/tests/export.test.ts` (5 tests) & `src/test/export.test.ts` (4 tests): Formula-injection sanitization across unified CSV/XLSX columns, UTF-8 BOM (`EF BB BF`) verification, `includeNeedsReview` filtering, and `URL.revokeObjectURL` cleanup.
+  - `src/test/components.test.tsx` (4 tests): Verification badges, `aria-sort` buttons, `TraceabilityPanel` underscore formatting & unsafe URL filtering, and `AnalyticsDashboard` `Verified Only` toggle.
+  - `src/test/app.test.tsx` (4 tests): Invalid date-range alert without retry/history, skipped `network_error` history writes, unparseable-output Traceability rendering, frozen query provenance, and filter-synchronized exports.
+  - `src/test/db.test.ts` (3 tests): IndexedDB persistence, deletion/fallback clearing, and legacy migration integrity.
+- **Documentation & Metadata Alignment**: Updated `README.md`, `CHANGELOG.md`, `SECURITY.md`, `.env.example`, `.bolt/memory.md`, and `index.html`.
+- **TypeScript Configuration**: Enabled `"strict": true` and excluded `supabase`, `dist`, and `node_modules` in `tsconfig.json`.
 
 ### Fixed
-- **All-Invalid Row Status Classification**: Returned `partial_success` instead of `no_results` in `researchFinancialNews` when a CSV table parses with rows that all fail validation, and resolved `import.meta.env` dynamically per call.
+- **Parser & Classification Edge Cases**: Required a true `Date,Time,Headline` CSV header before parsing (classifying prose containing `"Headline"` as `unparseable_model_output`), stripped trailing commentary rows (`Note:`, `Disclaimer:`, `Sources:`) into `parseErrors`, and classified all-invalid parsed tables as `partial_success`.
+- **Semantic & Chronological Sorting**: Sorted `Impact` by severity (`High > Medium > Low`) and `Date` chronologically alongside `Time` in `src/App.tsx`.
+- **Invalid Date & Error History Handling**: Separated `INVALID_DATE_RANGE` into a non-retryable validation alert and skipped saving `network_error` runs into IndexedDB history.
 - **Name-Mapped Chart Colors**: Mapped `AnalyticsDashboard` sentiment (`Positive`, `Negative`, `Neutral`) and market impact (`High`, `Medium`, `Low`) pie slice colors by category name rather than array index.
-- **Status Filter Reset**: Reset `statusFilter` to `'all'` whenever a new research query starts in `src/App.tsx`.
-- **CI/CD Pipeline Reliability**: Synchronized `package-lock.json` with `package.json` so `npm ci` runs cleanly, updated `.github/workflows/ci.yml` from Node 20 to Node 22 (required by `vitest` 5 and `@supabase/supabase-js`), upgraded `actions/checkout` and `actions/setup-node` to `@v6` (native Node 24 action runtime), and added concurrency cancellation, job timeouts, and `workflow_dispatch` triggers.
+- **CI/CD Pipeline Reliability**: Synchronized `package-lock.json` with `package.json`, set `"engines": { "node": ">=22.0.0" }`, upgraded `.github/workflows/ci.yml` to Node 22 with `actions/checkout@v6` and `actions/setup-node@v6`, added `npm audit --audit-level=critical`, and configured concurrency cancellation and job timeouts.
 
 ## [1.4.0] - 2026-09-18
 

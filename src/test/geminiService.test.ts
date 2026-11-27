@@ -93,11 +93,11 @@ describe('Gemini Research Service (proxy)', () => {
   it('parses valid CSV output into validated items', async () => {
     const csv =
       'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation\n' +
-      '2025-02-21,14:05,"Company X beats earnings","Company X reported quarterly earnings above expectations.","XCO","US","Earnings","Reuters","https://example.com/a","Positive","High","Earnings beat drives stock higher."';
+      '2025-02-21,14:05,"Company X beats earnings","Company X reported quarterly earnings above expectations.","XCO","US","Earnings","Reuters","https://www.reuters.com/article/a","Positive","High","Earnings beat drives stock higher."';
     mockFetch.mockResolvedValue(
       okResponse({
         rawText: csv,
-        groundingSources: [{ title: 'Reuters', url: 'https://example.com/a' }],
+        groundingSources: [{ title: 'Reuters', url: 'https://www.reuters.com/article/a' }],
         modelName: 'gemini-3-flash-preview',
       })
     );
@@ -240,5 +240,55 @@ describe('Gemini Research Service (proxy)', () => {
     const recovered = await researchFinancialNews('recovered query');
     expect(mockFetch).toHaveBeenCalledTimes(THROTTLE_CONFIG.MAX_REQUESTS_PER_WINDOW + 1);
     expect(recovered.status).toBe('no_results');
+  });
+
+  it('rejects prose containing the word Headline as unparseable_model_output', async () => {
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: 'I could not find any Headline matching your query today.',
+        groundingSources: [],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
+
+    const result = await researchFinancialNews('test query');
+    expect(result.status).toBe('unparseable_model_output');
+    expect(result.errorCode).toBe('UNPARSEABLE_OUTPUT');
+  });
+
+  it('strips trailing Note commentary lines instead of turning them into data rows', async () => {
+    const csvWithNote =
+      'Date,Time,Headline,Short_Summary,Primary_Ticker_or_Entity,Region_or_Market,Category,Source_Name,Source_URL,Sentiment,Impact,Sentiment_Explanation\n' +
+      '2025-02-21,14:05,"Company X beats earnings","Company X reported quarterly earnings above expectations.","XCO","US","Earnings","Reuters","https://www.reuters.com/article/a","Positive","High","Earnings beat drives stock higher."\n' +
+      'Note: Only verified articles are listed above.';
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rawText: csvWithNote,
+        groundingSources: [{ title: 'Reuters', url: 'https://www.reuters.com/article/a' }],
+        modelName: 'gemini-3-flash-preview',
+      })
+    );
+
+    const result = await researchFinancialNews('test query');
+    expect(result.status).toBe('success');
+    expect(result.items).toHaveLength(1);
+    expect(result.summary.hasParseErrors).toBe(true);
+  });
+
+  it('returns REQUEST_TIMEOUT when fetch exceeds REQUEST_TIMEOUT_MS', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockImplementation((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        });
+      });
+    });
+
+    const promise = researchFinancialNews('slow query');
+    await vi.advanceTimersByTimeAsync(46_000);
+    const result = await promise;
+    expect(result.status).toBe('network_error');
+    expect(result.errorCode).toBe('REQUEST_TIMEOUT');
   });
 });

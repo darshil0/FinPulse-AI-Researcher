@@ -1,5 +1,4 @@
 import Papa from "papaparse";
-import { NewsItem } from "../types";
 import {
   validateResearchResults,
   ValidatedNewsItem,
@@ -7,7 +6,6 @@ import {
   ResearchRunStatus,
   ResearchErrorCode,
 } from "../lib/validation";
-
 
 export const GEMINI_CONFIG = {
   MODEL_NAME: "gemini-3-flash-preview",
@@ -18,6 +16,8 @@ export const THROTTLE_CONFIG = {
   WINDOW_MS: 60_000,
   MAX_REQUESTS_PER_WINDOW: 10,
 };
+
+export const REQUEST_TIMEOUT_MS = 45_000;
 
 let lastRequestTime = 0;
 let requestTimestamps: number[] = [];
@@ -113,6 +113,9 @@ export interface ResearchResult {
   status: ResearchRunStatus;
   errorCode?: ResearchErrorCode;
   errorMessage?: string;
+  query?: string;
+  startDate?: string;
+  endDate?: string;
   rawResponse: string;
   groundingSources: GroundingSource[];
   items: ValidatedNewsItem[];
@@ -134,12 +137,18 @@ function emptySummary(hasParseErrors = false, parseErrors: string[] = []): Valid
 function errorResult(
   errorCode: ResearchErrorCode,
   errorMessage: string,
-  timestamp: number
+  timestamp: number,
+  query?: string,
+  startDate?: string,
+  endDate?: string
 ): ResearchResult {
   return {
     status: 'network_error',
     errorCode,
     errorMessage,
+    query,
+    startDate,
+    endDate,
     rawResponse: '',
     groundingSources: [],
     items: [],
@@ -147,6 +156,18 @@ function errorResult(
     modelName: GEMINI_CONFIG.MODEL_NAME,
     timestamp,
   };
+}
+
+function isTrailingCommentaryRow(row: Record<string, string>): boolean {
+  const keys = Object.keys(row);
+  if (keys.length === 0) return true;
+  const dateVal = String(row.Date ?? '').trim();
+  const nonEmptyCols = keys.filter((k) => String(row[k] ?? '').trim().length > 0);
+  return (
+    nonEmptyCols.length === 1 &&
+    nonEmptyCols[0] === 'Date' &&
+    /^(note|disclaimer|sources?|important|\*+)\b/i.test(dateVal)
+  );
 }
 
 export async function researchFinancialNews(
@@ -163,23 +184,47 @@ export async function researchFinancialNews(
     return errorResult(
       'PROVIDER_ERROR',
       'Research service is not configured. Please try again later.',
-      timestamp
+      timestamp,
+      query,
+      startDate,
+      endDate
     );
   }
 
   const slot = await enforceClientRateLimit(signal);
   if (slot === 'aborted') {
-    return errorResult('NETWORK_FAILURE', 'Request was cancelled by user.', timestamp);
+    return errorResult(
+      'NETWORK_FAILURE',
+      'Request was cancelled by user.',
+      timestamp,
+      query,
+      startDate,
+      endDate
+    );
   }
   if (slot === 'rate_limited') {
     return errorResult(
       'RATE_LIMITED',
       'Too many research requests in a short period. Please wait a moment before trying again.',
-      timestamp
+      timestamp,
+      query,
+      startDate,
+      endDate
     );
   }
 
   const endpoint = `${supabaseUrl}/functions/v1/gemini-research`;
+  const timeoutController = new AbortController();
+  let timedOut = false;
+
+  const onCallerAbort = () => timeoutController.abort();
+  signal?.addEventListener('abort', onCallerAbort, { once: true });
+
+  const timeoutHandle = setTimeout(() => {
+    timedOut = true;
+    timeoutController.abort();
+  }, REQUEST_TIMEOUT_MS);
+
   let response: Response;
 
   try {
@@ -190,17 +235,40 @@ export async function researchFinancialNews(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ query, startDate: startDate || '', endDate: endDate || '' }),
-      signal,
+      signal: timeoutController.signal,
     });
   } catch (err: unknown) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      return errorResult('NETWORK_FAILURE', 'Request was cancelled by user.', timestamp);
+    if (timedOut) {
+      return errorResult(
+        'REQUEST_TIMEOUT',
+        'Research request timed out. Please try again.',
+        timestamp,
+        query,
+        startDate,
+        endDate
+      );
+    }
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+      return errorResult(
+        'NETWORK_FAILURE',
+        'Request was cancelled by user.',
+        timestamp,
+        query,
+        startDate,
+        endDate
+      );
     }
     return errorResult(
       'NETWORK_FAILURE',
       'Failed to reach the research service. Please check your network connection and try again.',
-      timestamp
+      timestamp,
+      query,
+      startDate,
+      endDate
     );
+  } finally {
+    clearTimeout(timeoutHandle);
+    signal?.removeEventListener('abort', onCallerAbort);
   }
 
   if (!response.ok) {
@@ -217,7 +285,10 @@ export async function researchFinancialNews(
     return errorResult(
       response.status === 429 ? 'RATE_LIMITED' : 'NETWORK_FAILURE',
       message,
-      timestamp
+      timestamp,
+      query,
+      startDate,
+      endDate
     );
   }
 
@@ -228,7 +299,10 @@ export async function researchFinancialNews(
     return errorResult(
       'INVALID_RESPONSE_STRUCTURE',
       'Research service returned an unexpected response.',
-      timestamp
+      timestamp,
+      query,
+      startDate,
+      endDate
     );
   }
 
@@ -242,28 +316,28 @@ export async function researchFinancialNews(
   const modelName =
     typeof payload.modelName === 'string' ? payload.modelName : GEMINI_CONFIG.MODEL_NAME;
 
-  // Clean raw text
-  let csvText = rawText.trim();
+  // Clean raw text and remove optional UTF-8 BOM / markdown code fences
+  let csvText = rawText.replace(/^\uFEFF/, '').trim();
   if (csvText.includes('```')) {
-    const match = csvText.match(/```(?:csv)?\n([\s\S]*?)\n```/);
+    const match = csvText.match(/```(?:csv)?\r?\n([\s\S]*?)\r?\n```/i);
     if (match) {
       csvText = match[1];
     } else {
-      csvText = csvText.replace(/```[a-z]*\n/g, '').replace(/```/g, '');
+      csvText = csvText.replace(/```[a-z]*\r?\n/gi, '').replace(/```/g, '');
     }
   }
 
-  const headerIndex = csvText.indexOf('Date,Time,Headline');
-  if (headerIndex !== -1) {
-    csvText = csvText.substring(headerIndex);
-  }
-
-  if (!csvText || !csvText.includes('Headline')) {
+  // Require an actual CSV header line starting with Date,Time,Headline (ignores prose mentioning "Headline")
+  const headerMatch = csvText.match(/(?:^|\r?\n)(Date\s*,\s*Time\s*,\s*Headline\b[^\r\n]*)/);
+  if (!headerMatch || headerMatch.index === undefined) {
     return {
       status: 'unparseable_model_output',
       errorCode: 'UNPARSEABLE_OUTPUT',
       errorMessage:
         'Model returned output that does not contain expected CSV header structure.',
+      query,
+      startDate,
+      endDate,
       rawResponse: rawText,
       groundingSources,
       items: [],
@@ -273,17 +347,31 @@ export async function researchFinancialNews(
     };
   }
 
+  const headerOffset = csvText.indexOf(headerMatch[1], headerMatch.index);
+  csvText = csvText.substring(headerOffset).trim();
+
   // Parse CSV with PapaParse
-  const parseResult = Papa.parse<Record<string, string>>(csvText.trim(), {
+  const parseResult = Papa.parse<Record<string, string>>(csvText, {
     header: true,
     skipEmptyLines: true,
   });
 
   const parseErrors = parseResult.errors.map((e) => e.message);
+  const dataRows: Record<string, string>[] = [];
+  for (const row of parseResult.data) {
+    if (isTrailingCommentaryRow(row)) {
+      parseErrors.push(`Ignored trailing commentary line: ${row.Date}`);
+    } else {
+      dataRows.push(row);
+    }
+  }
 
-  if (parseResult.data.length === 0) {
+  if (dataRows.length === 0) {
     return {
       status: 'no_results',
+      query,
+      startDate,
+      endDate,
       rawResponse: rawText,
       groundingSources,
       items: [],
@@ -293,14 +381,21 @@ export async function researchFinancialNews(
     };
   }
 
-  // Validate results with the runtime schema & validation rules
-  const { items, summary } = validateResearchResults(parseResult.data, parseErrors);
+  // Validate results with runtime schema, date range, and grounding checks
+  const { items, summary } = validateResearchResults(dataRows, parseErrors, {
+    startDate: startDate || undefined,
+    endDate: endDate || undefined,
+    groundingSources,
+  });
 
   const status: ResearchRunStatus =
     summary.verifiedRows === summary.totalRows ? 'success' : 'partial_success';
 
   return {
     status,
+    query,
+    startDate,
+    endDate,
     rawResponse: rawText,
     groundingSources,
     items,

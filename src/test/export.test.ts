@@ -162,6 +162,9 @@ describe('Export & Formula Injection Protection', () => {
       expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
       const blobArg = (URL.createObjectURL as any).mock.calls[0][0] as Blob;
       const csvText = await blobArg.text();
+      // JSDOM Blob.text() strips or decodes leading UTF-8 BOM, so verify raw bytes for EF BB BF
+      const rawBytes = new Uint8Array(await blobArg.arrayBuffer());
+      expect(Array.from(rawBytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
       expect(csvText).toContain("'=HYPERLINK(\"\"http://evil.com\"\",\"\"x\"\")");
       expect(csvText).toContain("'@EvilSource");
       expect(clickSpy).toHaveBeenCalledTimes(1);

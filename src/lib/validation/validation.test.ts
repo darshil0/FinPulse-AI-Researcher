@@ -150,7 +150,7 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
     }
 
     const httpResult = validateNewsItem(
-      { ...validRow, Source_URL: 'http://example.com/news' },
+      { ...validRow, Source_URL: 'http://reuters.com/news' },
       0
     );
     expect(httpResult.isVerified).toBe(true);
@@ -170,7 +170,7 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
     expect(RawNewsItemSchema.safeParse(result.data).success).toBe(false);
   });
 
-  it('flags unexpected extra columns from model output as Needs review', () => {
+  it('flags unexpected extra columns from model output as Needs review and preserves them in raw', () => {
     const result = validateNewsItem(
       { ...validRow, Unexpected_Extra_Column: 'extra' },
       0
@@ -178,6 +178,7 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
 
     expect(result.isVerified).toBe(false);
     expect(result.verificationStatus).toBe('Needs review');
+    expect(result.raw.Unexpected_Extra_Column).toBe('extra');
     expect(
       result.validationIssues.some(
         (issue) => issue.field === 'Row' && issue.code === 'UNEXPECTED_COLUMNS'
@@ -230,17 +231,73 @@ describe('validateNewsItem & RawNewsItemSchema edge cases', () => {
     );
   });
 
-  it('preserves unmodified raw enum values while storing normalized values in data', () => {
+  it('preserves unmodified raw values (including whitespace) while storing normalized values in data', () => {
     const result = validateNewsItem(
-      { ...validRow, Sentiment: 'positive', Impact: 'LOW' },
+      { ...validRow, Sentiment: '  positive ', Impact: 'LOW' },
       2
     );
 
     expect(result.isVerified).toBe(true);
-    expect(result.raw.Sentiment).toBe('positive');
+    expect(result.raw.Sentiment).toBe('  positive ');
     expect(result.raw.Impact).toBe('LOW');
     expect(result.data.Sentiment).toBe('Positive');
     expect(result.data.Impact).toBe('Low');
+  });
+
+  it('rejects calendar rollovers, non-ISO dates, future dates, and out-of-range dates', () => {
+    for (const invalidCal of ['2026-02-30', '2026-04-31', '5']) {
+      const res = validateNewsItem({ ...validRow, Date: invalidCal }, 0);
+      expect(res.isVerified).toBe(false);
+      expect(res.validationIssues.some((i) => i.code === 'INVALID_DATE')).toBe(true);
+    }
+
+    const futureRes = validateNewsItem(
+      { ...validRow, Date: '2099-01-01' },
+      0,
+      { referenceDate: '2026-11-27' }
+    );
+    expect(futureRes.isVerified).toBe(false);
+    expect(futureRes.validationIssues.some((i) => i.code === 'FUTURE_DATE')).toBe(true);
+
+    const rangeRes = validateNewsItem(
+      { ...validRow, Date: '2025-02-10' },
+      0,
+      { startDate: '2025-02-15', endDate: '2025-02-22', referenceDate: '2026-11-27' }
+    );
+    expect(rangeRes.isVerified).toBe(false);
+    expect(rangeRes.validationIssues.some((i) => i.code === 'DATE_OUT_OF_RANGE')).toBe(true);
+  });
+
+  it('rejects placeholder/local URLs and flags ungrounded sources when groundingSources are provided', () => {
+    for (const placeholder of [
+      'https://example.com/fake-article',
+      'http://localhost/x',
+      'http://127.0.0.1/news',
+    ]) {
+      const res = validateNewsItem({ ...validRow, Source_URL: placeholder }, 0);
+      expect(res.isVerified).toBe(false);
+      expect(res.validationIssues.some((i) => i.code === 'PLACEHOLDER_URL')).toBe(true);
+    }
+
+    const singleLabel = validateNewsItem({ ...validRow, Source_URL: 'https://a' }, 0);
+    expect(singleLabel.isVerified).toBe(false);
+    expect(singleLabel.validationIssues.some((i) => i.code === 'INVALID_URL_SCHEME')).toBe(true);
+
+    const ungrounded = validateNewsItem(validRow, 0, {
+      groundingSources: [{ title: 'bloomberg.com', url: 'https://bloomberg.com/markets' }],
+    });
+    expect(ungrounded.isVerified).toBe(false);
+    expect(ungrounded.validationIssues.some((i) => i.code === 'UNGROUNDED_SOURCE')).toBe(true);
+
+    const groundedViaTitle = validateNewsItem(validRow, 0, {
+      groundingSources: [
+        {
+          title: 'reuters.com',
+          url: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123',
+        },
+      ],
+    });
+    expect(groundedViaTitle.isVerified).toBe(true);
   });
 });
 

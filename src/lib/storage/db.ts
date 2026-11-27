@@ -31,6 +31,10 @@ const MAX_STORED_RUNS = 200;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
+export function resetDBConnectionForTests(): void {
+  dbPromise = null;
+}
+
 function getDB(): Promise<IDBPDatabase> {
   if (!dbPromise) {
     dbPromise = openDB(DB_NAME, DB_VERSION, {
@@ -42,13 +46,23 @@ function getDB(): Promise<IDBPDatabase> {
           store.createIndex('status', 'status');
         }
       },
+      blocking() {
+        dbPromise?.then((db) => db.close()).catch(() => {});
+        dbPromise = null;
+      },
+      terminated() {
+        dbPromise = null;
+      },
+    }).catch((err) => {
+      dbPromise = null;
+      throw err;
     });
   }
   return dbPromise;
 }
 
 /**
- * Safe IndexedDB wrapper with fallback in case IndexedDB is blocked or throws
+ * Safe IndexedDB wrapper with fallback in case IndexedDB is blocked or throws.
  */
 export async function saveResearchRun(run: StoredResearchRun): Promise<void> {
   try {
@@ -57,7 +71,6 @@ export async function saveResearchRun(run: StoredResearchRun): Promise<void> {
     await pruneOldRuns(db);
   } catch (err) {
     console.warn('Failed to save research run to IndexedDB:', err);
-    // Fallback to localStorage if IndexedDB fails
     try {
       const existing = localStorage.getItem(FALLBACK_STORAGE_KEY);
       const runs: StoredResearchRun[] = existing ? JSON.parse(existing) : [];
@@ -105,6 +118,9 @@ export async function deleteResearchRun(id: string): Promise<void> {
   try {
     const db = await getDB();
     await db.delete(STORE_NAME, id);
+  } catch (err) {
+    console.warn('Failed to delete research run from IndexedDB:', err);
+  } finally {
     try {
       const fallback = localStorage.getItem(FALLBACK_STORAGE_KEY);
       if (fallback) {
@@ -117,8 +133,6 @@ export async function deleteResearchRun(id: string): Promise<void> {
     } catch {
       // Ignore fallback cleanup errors
     }
-  } catch (err) {
-    console.warn('Failed to delete research run from IndexedDB:', err);
   }
 }
 
@@ -126,21 +140,28 @@ export async function clearAllResearchRuns(): Promise<void> {
   try {
     const db = await getDB();
     await db.clear(STORE_NAME);
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
-    localStorage.removeItem(FALLBACK_STORAGE_KEY);
   } catch (err) {
     console.warn('Failed to clear research runs from IndexedDB:', err);
+  } finally {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        localStorage.removeItem(FALLBACK_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore localStorage cleanup errors
+    }
   }
 }
 
 /**
- * One-time migration from localStorage `finpulse_history` to IndexedDB
+ * One-time migration from localStorage `finpulse_history` to IndexedDB.
  */
 export async function migrateLegacyLocalStorage(): Promise<void> {
   if (typeof localStorage === 'undefined') return;
 
   const isMigrated = localStorage.getItem(MIGRATION_KEY);
-  if (isMigrated === 'true') return;
+  if (isMigrated) return;
 
   const legacyDataStr = localStorage.getItem(LEGACY_STORAGE_KEY);
   if (!legacyDataStr) {
@@ -148,8 +169,17 @@ export async function migrateLegacyLocalStorage(): Promise<void> {
     return;
   }
 
+  let legacyItems: unknown;
   try {
-    const legacyItems = JSON.parse(legacyDataStr);
+    legacyItems = JSON.parse(legacyDataStr);
+  } catch (err) {
+    console.warn('Migration from localStorage failed (invalid JSON):', err);
+    // Mark migration handled so repeated calls do not re-warn on every load
+    localStorage.setItem(MIGRATION_KEY, 'corrupt');
+    return;
+  }
+
+  try {
     if (Array.isArray(legacyItems) && legacyItems.length > 0) {
       const db = await getDB();
       const tx = db.transaction(STORE_NAME, 'readwrite');
@@ -157,22 +187,31 @@ export async function migrateLegacyLocalStorage(): Promise<void> {
 
       for (const item of legacyItems) {
         if (!item || typeof item !== 'object') continue;
+        const record = item as Record<string, unknown>;
+        const itemCount =
+          typeof record.itemCount === 'number' && record.itemCount >= 0
+            ? record.itemCount
+            : 0;
 
-        const id = item.id || `legacy-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        const id =
+          typeof record.id === 'string' && record.id
+            ? record.id
+            : `legacy-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
         const run: StoredResearchRun = {
           id,
-          query: item.query || 'Legacy Search',
-          timestamp: item.timestamp || Date.now(),
-          startDate: item.startDate || '',
-          endDate: item.endDate || '',
-          status: 'success',
+          query: typeof record.query === 'string' && record.query ? record.query : 'Legacy Search',
+          timestamp: typeof record.timestamp === 'number' ? record.timestamp : Date.now(),
+          startDate: typeof record.startDate === 'string' ? record.startDate : '',
+          endDate: typeof record.endDate === 'string' ? record.endDate : '',
+          status: itemCount > 0 ? 'partial_success' : 'no_results',
           rawResponse: '',
           groundingSources: [],
           items: [],
           summary: {
-            totalRows: item.itemCount || 0,
-            verifiedRows: item.itemCount || 0,
-            needsReviewRows: 0,
+            totalRows: itemCount,
+            verifiedRows: 0,
+            needsReviewRows: itemCount,
             hasParseErrors: false,
             parseErrors: [],
           },
@@ -186,7 +225,6 @@ export async function migrateLegacyLocalStorage(): Promise<void> {
 
     localStorage.setItem(MIGRATION_KEY, 'true');
   } catch (err) {
-    console.warn('Migration from localStorage failed:', err);
-    // Do not mark as migrated if critical error occurred so it can retry or preserve
+    console.warn('Migration from localStorage failed (database error):', err);
   }
 }
